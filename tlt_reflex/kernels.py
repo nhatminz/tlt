@@ -59,11 +59,13 @@ def tlt_reflex_reset(A,Q,PSI,LIVE,CACHED,SLOTS,V:tl.constexpr,D:tl.constexpr,
     slot=tl.load(SLOTS+row).to(tl.int64)
     x=tile*BLOCK+tl.arange(0,BLOCK)
     tl.store(A+slot*V*D+x,0,x<V*D)
+    tl.store(Q+slot*V+x,0,x<V)
+    tl.store(PSI+slot*D+x,0,x<D)
     if tile==0:
         tl.store(LIVE+slot,ALLOCATED)
         tl.store(CACHED+slot,False)
-    # Q/psi need not be zeroed: cached=False makes them unreadable until the
-    # next actual root overwrites them. No stale generation can consume them.
+    # Reset all request-owned state, including cached supervision/feature;
+    # done in this lifecycle kernel, never by batch-row compaction.
 
 
 @triton.jit

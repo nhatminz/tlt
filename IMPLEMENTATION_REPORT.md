@@ -1,108 +1,148 @@
-# Implementation / validation report
+# Review-fix implementation / validation report
 
-Date: 2026-10-05. New sibling folder `TltReflex/` only.
-`git -C ../SpecNaacl status --short` remained empty: no SpecNaacl edits.
+Date: 2026-10-05. This report supersedes the earlier local-artifact-only result.
+Mode: **TLT adaptive speculative rollout + fixed pretrained EAGLE3**, not full
+Spot-Trainer TLT. No edits to SpecNaacl; its git status stayed empty.
 
-## Created / changed
+## Changes
 
-- Full official FastRL archive + included official TLT SGLang fork,
-  pinned commit `bce3df7a4d46473912e9b81bf47bca419729557f`.
-- Pristine SGLang Python copy, `PROVENANCE.json`, `upstream_hashes.json`,
-  `scripts/audit_upstream.py` for protected-source/equivalence checks.
-- `tlt_reflex/{state,kernels,integration,telemetry}.py`: slot-indexed dense
-  LK Reflex, GPU preallocation, Triton proposal/cache/update, lifecycle hooks,
-  opt-in profiling outside captured graphs. Root feedback only.
-- `tlt_reflex/{runtime,checkpoint,data}.py`: exact source selection, runtime
-  preflight, actual pretrained checkpoint/mapping adapter, local data handling.
-- `benchmark.py`, `run_benchmark.sh`, `benchmark_pair.sh`,
-  `scripts/smoke_benchmark.sh`, `scripts/compare_upstream_outputs.py`.
-- `rl.py`, `run_rl.sh`, `scripts/prepare_rl_data.py`: dispatch official
-  `verl.trainer.main_fastrl`; no rewritten RL objective/reward/optimizer.
-- Model path configs for all seven existing model keys and two train launchers
-  per key: normal file = TLT+Reflex, `_tlt.sh` = TLT-only.
-- Exact dependency lock/input/constraints, installer/wheelhouse builder,
-  vendored FlashInfer0.4 with official stable-FFI ABI backport and checked wheel.
-- Tests, `README_REFLEX.md`, `ENVIRONMENT.md`, `huongdanchay.md`.
+- Reproducible `scripts/bootstrap_upstream.sh` and tracked
+  `patches/fastrl_reflex.patch`: clone official FastRL, detach exact commit
+  bce3df7a4d46473912e9b81bf47bca419729557f, save pristine SGLang before patch,
+  apply/check/reverse-check, verify commit/file-set/patch and patched-file hashes.
+  Existing wrong/dirty/unidentified source is refused, never reset/overwritten.
+- Offline git bundle preparation, verified source bootstrap and pytest session
+  bootstrap when source is absent. Source tests do not require local wheels.
+  `upstream/`, `wheels/`, `artifacts/` remain generated/ignored, but all code,
+  patches, hashes and generation instructions are in the deliverable.
+- RL conversion uses actual supported reward IDs: DAPO/math_dapo,
+  GSM8K/openai/gsm8k, MATH/simplelr/lighteval/MATH; preserves supported original
+  math identifiers. Unknown families fail and require an explicit identifier.
+  Correct ground-truth normalization, no blanket boxing; actual unchanged
+  upstream scorers are exercised for positive rewards.
+  Dataset-specific final-answer instructions match upstream GSM8K strict
+  `####` and DAPO/AIME Minerva `Answer:` formats. Both methods/benchmark share
+  the same formatting. Existing invalid converted data is rejected by validator,
+  not silently reused or overwritten.
+- Proposal math remains Fast-LK dense state. Normal/eager draft, initial/root
+  capture, post-verification eager extend and captured extend all hook before
+  original softmax/topk. Normal graph calls the same draft routine. V2 is not
+  supported: verified inheritance invokes the existing factory overlap guard.
+- Feedback consumes the existing filtered teacher or greedy predictions and
+  strided `accept_index[:,0]`, gathers fixed compact mapping and renormalizes.
+  No added target forward, target softmax or sampling RNG draws.
+- Request-slot ownership unchanged; free/reuse now zeroes Q/psi as well as A
+  and validity flags in the same lifecycle kernel. Scratch buffers/addresses
+  stay preallocated; no batch-row owner assumptions or state all-reduces.
+- Added memory MB (A-only and total owned buffers), correction latency,
+  root/extend timing and total proposal latency. Profile events remain OFF in
+  production. Eager profiling is a separate pass; nested times cannot be summed
+  into net wall overhead. Source acceptance/round counters remain weighted.
+- Small-batch BEG benchmark reserves sufficient common request/graph capacity
+  for ALL upstream buckets (default minimum32 for bucket21+), preventing an
+  empty capture set. It does not submit additional samples or alter BEG rules.
+- `smoke_parity.sh` (OFF/LR0/active fixed-greedy diagnostic), adaptive smoke,
+  `benchmark_grid.sh` (prompt batches1,2,4,8,16,32), bootstrap/data/path/feedback/
+  lifecycle/zero-LR/disabled-profile tests.
+- Effective Hydra-config validation rejects EAGLE3 Spot Trainer regardless of
+  True/true spelling, before model/Ray launch.
 
-Only seven FastRL upstream files differ (details/hashes in provenance):
+Upstream patch contains ALL seven modified files: eagle_worker.py, eagle_info.py,
+both draft graph runners, memory_pool.py, scheduler.py, constants_ppo.py.
+No changes to tree builder, verifier/sampler algorithm, BEG/MAB selection,
+target distribution, GRPO loss/reward/optimizer or Spot Trainer implementation.
 
-1. EAGLE worker: initialize plugin before graph capture; normal/root proposals;
-   optional phase timing + already-existing accepted CPU counters.
-2. EAGLE verification input: feedback from existing teacher + root indices.
-3. Normal draft graph runner: preallocated valid-batch GPU scalar for plugin.
-4. Draft-extend graph runner: root correction/cache inside real captured path.
-5. ReqToTokenPool: alloc/free/clear reset request-local state.
-6. Scheduler: optional metrics through existing get_internal_state RPC.
-7. VERL constants_ppo: propagate plugin/import identity to remote Ray workers.
+## Reproducibility evidence
 
-No edit to tree construction, top-k utility, native verifier/sampler,
-BEG/MAB selection/reward, KV cache algorithm, GRPO objective, reward function,
-FSDP trainer, or background trainer implementation. Dependency-only FlashInfer
-backport is explicit (official TensorView ABI migration, not a version-check bypass).
+An isolated artifact Git repo was built from tracked + new deliverable files
+(excluding ignored upstream/wheels). It was committed ONLY in a temporary test
+directory and cloned there; the user's repository/index was not committed.
 
-## Checks actually run
+- Fresh clone, no upstream/wheels: direct executable bootstrap against official
+  GitHub succeeded; exact commit and seven-file patch verified; unit suite passed.
+- Moving generated upstream aside (recoverable equivalent of removing it), then
+  pytest alone: session bootstrap using local git bundle succeeded; suite passed.
+- Separate offline bootstrap into an empty directory: passed. Repeated bootstrap:
+  passed. Wrong HEAD guard: tested, refuses and leaves existing HEAD unchanged.
+- Source audit: 126 protected hash files plus 680 pristine Python files; exact
+  patched-file fingerprints and patch checksums pass.
 
-- Python3.12 `python -m compileall -q .`: PASS (full vendor tree included).
-  Existing upstream invalid-escape/string-identity SyntaxWarnings only.
-- `bash -n`: PASS for all 21 authored shell scripts.
-- CLI dry-run benchmark validation: PASS for tlt and tlt_reflex.
-- Real upstream Hydra `fastrl_trainer` schema composition: PASS for both
-  methods; also Qwen3-1.7B/Qwen2.5-3B wrappers and one-step override.
-- `pytest -q`: **36 PASS**, no skipped tests in the complete run. Real GPU tests
-  used available RTX3090 / Torch2.5.1cu124 / Triton3.1 (not B200 target stack).
-  Test-only safetensors0.7.0 added to an isolated `/tmp` target, not peer env.
-  Includes CPU/GPU analytic update parity, compact vocab19/519/16000,
-  sampled/greedy teacher, strided verifier root indices, request reorder,
-  repeated context proposals, free/reuse, padded slot0 protection, actual
-  CUDA graph capture/replay, no plugin sync/host copies/collectives/loss log.
-  Actual upstream proposal Python functions tested pristine vs OFF and empty
-  Reflex: same tree parents/selected indices/tokens, KV movement, RNG state;
-  deterministic NN stub and shared torch.topk stand in for model/native SG topk.
-  This is **not** a claim of full engine equivalence with real model weights.
-  Adapter names/shapes/required weights/mapping/idempotence/export corruption
-  are checked; state remains FP32 independently of global default dtype;
-  real target-family capture APIs prove no double layer-index shift.
-- Source audit: PASS, 126 protected hash files + 680 pristine Python files;
-  changes confined to seven files above; bundled wheel SHA256 verified.
-- Dependency resolver: PASS, full 206-package exact lock targeting Python3.12
-  Linux x86_64, upstream era cutoff; CUDA Python/bindings12.8 match cu128.
-- FlashInfer patched wheel build: PASS in dedicated Python3.12 builder.
-- `python -m pip check`: PASS in existing test env and isolated builder env.
-  **Neither is the fully installed 206-package TLT runtime. Full-stack B200
-  pip check/native-import validation remains required and runs in installer.**
+The deliverable changes must be included in your commit/upload; the previous
+published HEAD without the new scripts/patches is not claimed reproducible.
 
-## Real benchmark/RL not yet validated
+## Tests actually run
 
-Attempted `scripts/smoke_benchmark.sh` with isolated Python3.12: stopped at
-preflight, correctly reporting missing Torch2.8.0, Transformers4.57.1,
-sgl-kernel0.3.15, FlashInfer0.4.0. No engine was launched and no benchmark data
-were generated. Machine also lacks nvcc and configured server target/draft/data
-paths. Existing GPU test env has different versions; it was not modified to
-pretend to be the official stack. No full training launched.
+- Final TltReflex-only suite: **64 passed**, real RTX3090 CUDA tests included;
+  Torch2.5.1cu124/Triton3.1 test environment, NOT the pinned B200 engine stack.
+- Clean-clone suite: **64 passed**, no upstream/wheels present before session;
+  offline git-bundle bootstrap automatically reconstructed all required sources.
+- Actual upstream Python draft/tree-input routines: pristine vs OFF, empty A,
+  and LR0 after feedback give exact parents/indices/tokens/KV moves and RNG state.
+  NN and native topk are controlled stubs; not a real checkpoint/engine test.
+- Actual captured-extend run_once body: OFF/LR0 exact; nonzero state changes topk
+  as expected on CPU/CUDA. Actual CUDA graph capture/replay of plugin passes.
+- Actual verifier prefix: greedy/stochastic branches reuse unchanged teacher/
+  root metadata; no extra forward/sampler invocation. Native verifier/topk
+  filtering are stubs in this harness, not a native-kernel validation claim.
+- Root analytic update against dense oracle with compact vocab19/519/16000,
+  reorder, simultaneous requests, finished/free/reuse, valid_bs padding,
+  stable buffer pointers and LR0 unchanged outputs/teacher: passed.
+- Actual pinned default_compute_score dispatch function + real scoring modules:
+  correct DAPO/GSM8K/MATH labels yield positive scores. No reward stubs.
+- compileall of whole TltReflex tree passed; upstream SyntaxWarnings only.
+- Shell syntax passed (all26 authored launchers at time of check).
+- CLI config validation and actual upstream Hydra composition passed for both
+  methods; configs match excluding run names/paths. Spot enable=True fails
+  with explicit fixed-EAGLE3/non-Spot error.
+- pip check passed in test/builder environments; NOT a certification of the
+  uninstalled full206-package B200 stack. Installer enforces that check there.
+- One accidental workspace-root pytest collection was interrupted after unrelated
+  sibling/vendor import errors; it is not included in the scoped suite claims.
 
-Thus real B200 native SGLang engine smoke, actual checkpoint model-forward
-parity, end-to-end RL, ordinary TP/multi-node execution, full native-extension
-compatibility and measured throughput/overhead remain unvalidated. Scripts
-are provided to run these on the server, **no fake AAL/tokens/s or speedup claim**.
+## FlashInfer packaging correction
 
-## Explicit limitations / unavoidable deviations
+The previous “full official PR1960 applied” claim was wrong: Git apply in a
+nested ignored directory could skip paths; that PR's TensorView revision also
+does not match the exact0.4.0 sdist. Host compilation confirmed old owning
+Tensor::operator-> no longer exposes TensorObj fields in stable FFI0.1.
 
-- Upstream ODT factory chooses EAGLE1, not EAGLE3. EAGLE3 modes keep official
-  default ODT OFF, reject enable=true. EAGLE3 opportunistic online training
-  is **not implemented** by this plugin. Upstream original code remains intact.
-- Non-overlap classic EAGLEWorker only (as upstream FastRL RL launcher);
-  V2/DP-attention mapping is not implemented. Unsupported mode fails clearly.
-- Dense state/buffers are compact-vocab, local to request slots/TP rank;
-  memory scales with configured max running requests and feature dimension.
-- RL remains official FastRL full-model FSDP GRPO, not SpecNaacl LoRA GRPO.
-  Same settings across tlt/tlt_reflex, but not a claim of identical GRPO setup
-  to SpecNaacl as an external comparison.
-- Checkpoint adapter rejects unsupported normalization/bias/tied-head variants;
-  no lossy conversion, random initialization or vocabulary rebuilding.
-- Standalone throughput pass uses CUDA graphs, profiling OFF; optional eager
-  component profiling is separate. Adaptive scheduler can react to overhead,
-  so same seed is not evidence of response-level bitwise equality.
-- New Triton FP32 reductions implement the same analytic LK objective; active
-  state parity is tolerance-tested, not claimed bitwise equal to a different
-  BLAS reduction order. Empty-state logits/probabilities/topk/tree are exact
-  in the tested proposal routines; target sampling code is unchanged.
+Tracked `flashinfer_stable_ffi.patch` now supplies a small owning-Tensor accessor
+compatibility class using typed get(), retaining TensorObj/FFI type/ownership.
+Only type aliases/accessor compatibility and beta dependency metadata change;
+no CUDA kernel math changes. Bootstrap uses explicit patch directory, verified
+official sdist SHA256, dry-run/apply/reverse-check and hashes of all changed files.
+
+- Host C++ accessor + typed function registration: passed.
+- Real TVM-FFI compiled host module on NumPy tensors: shape7 and same underlying
+  data pointer alias passed (not syntax-only and not a CUDA JIT claim).
+- Wheel rebuilt locally and independently from freshly bootstrapped source:
+  passed, exact version0.4.0. Auditor verifies packaged ABI code + metadata,
+  not a machine-specific wheel-byte hash. All changed source files are hashed.
+- Earlier live wheel replaced; old artifact preserved at
+  /tmp/tlt-review-old-flashinfer-wheel.whl, no source/model/dataset deletion.
+- Native CUDA JIT/FlashInfer sampling/attention compatibility is still untested
+  here. Do NOT infer this from host ABI or pure wheel-build success.
+
+## Native smoke / benchmark not completed
+
+Attempted TLT-only, tlt_reflex LR0 and LR.05 engine smoke: each stopped BEFORE
+engine launch at preflight, reporting missing Torch2.8.0, Transformers4.57.1,
+sgl-kernel0.3.15 and FlashInfer0.4.0 in the isolated Python3.12 builder.
+Also no nvcc or configured server model/pretrained draft/data assets here.
+
+Thus no real-model B200 engine equivalence, end-to-end RL, TP/multi-node, native
+CUDA JIT, batch-grid timings, measured AAL/tokens/s or speedup result is claimed.
+No benchmark JSON/results were fabricated; no full training launched.
+
+## Spot Trainer audit / remaining limits
+
+Both FSDP drafter factory and background factory select EAGLE1 llama/qwen2;
+draft_vocab_size wiring is commented out in FSDP setup. Background batch shifts
+a single hidden stream; loss uses frozen head plus SmoothL1/CE on that stream,
+not EAGLE3 three-feature/compact-head/unrolling training. Porting just class names
+would be wrong. Full capture/loss/compact mapping/sync and version invalidation
+need a separately verified EAGLE3 Spot Trainer port; not implemented here.
+
+Keep training=false for both methods; enabling it raises. Ordinary TP is
+designed in, not hardware-validated; overlap/V2 and DP-attention are explicitly
+unsupported, not silently switched to a different proposal/verifier.

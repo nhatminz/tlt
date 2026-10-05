@@ -36,7 +36,7 @@ def test_upstream_algorithm_source_and_bundled_wheel_provenance():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(),reason='upstream select_top_k_tokens explicitly uses CUDA')
-@pytest.mark.parametrize('mode',['off','empty_reflex'])
+@pytest.mark.parametrize('mode',['off','empty_reflex','zero_lr_after_feedback'])
 def test_real_draft_routines_tree_inputs_and_rng_match_pristine_upstream(mode):
     # Only the native extension fast_topk is substituted; every implementation
     # under comparison uses the same topk function, actual upstream routines.
@@ -49,6 +49,12 @@ def test_real_draft_routines_tree_inputs_and_rng_match_pristine_upstream(mode):
     state.reset_slots([5,1],allocated=True)
     slots=torch.tensor([5,1],device='cuda',dtype=torch.int32)
     teacher=SimpleNamespace(next_token_logits=torch.randn(2,19,device='cuda'),hidden_states=torch.randn(2,12,device='cuda'))
+    if mode=='zero_lr_after_feedback':
+        state.lr=0.
+        q=state.correct(teacher.next_token_logits,teacher.hidden_states,slots,root=True).softmax(-1)
+        state.cache_root(q,slots)
+        state.feedback(torch.randn(2,4,38,device='cuda').softmax(-1),
+                       torch.tensor([0,4],device='cuda',dtype=torch.int32),slots)
     outputs=[]; cache_moves=[]
     for folder,plugin in [(PRISTINE,None),(PATCHED,None if mode=='off' else state)]:
         forward_count=[]; moves=[]

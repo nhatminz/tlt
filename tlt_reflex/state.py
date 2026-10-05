@@ -41,6 +41,11 @@ class RequestReflex:
         self.mass=torch.empty(slots,self.tiles,device=self.device,dtype=torch.float32)
         self.stats=torch.empty(slots,self.tiles,2,device=self.device,dtype=torch.float32)
         self.total_updates=torch.zeros((),device=self.device,dtype=torch.int64)
+        if self.meter is not None:
+            self.meter.reflex_state_memory_mb=self.a.numel()*self.a.element_size()/1e6
+            self.meter.reflex_buffer_memory_mb=sum(t.numel()*t.element_size() for t in
+                (self.projection,self.a,self.q,self.psi,self.live,self.cached,self.root_out,self.deep_out,
+                 self.root_feature,self.deep_feature,self.mass,self.stats,self.total_updates))/1e6
 
     def section(self,key):
         return self.meter.section(key) if self.meter is not None else nullcontext()

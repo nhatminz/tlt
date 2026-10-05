@@ -10,12 +10,16 @@ cd /workspace/storage-shared/nlp/minhpn19/TltReflex
 python3.12 -m venv .venv-tlt
 source .venv-tlt/bin/activate
 export PYTHON_BIN="$(command -v python)"
-OFFLINE=1 INSTALL_RL=1 WHEELHOUSE="$PWD/wheelhouse" bash scripts/install_environment.sh
+OFFLINE=1 INSTALL_RL=1 FASTRL_GIT_SOURCE="$PWD/artifacts/fastrl-bce3df7.bundle" \
+  WHEELHOUSE="$PWD/wheelhouse" bash scripts/install_environment.sh
 python -m pip check
 python scripts/validate_environment.py --rl
 ```
 
 Sau này chỉ activate venv và export PYTHON_BIN; không cài lại mỗi lần train.
+Checkout sạch cần bootstrap source. Máy online chạy
+`./scripts/bootstrap_upstream.sh`; máy offline cần git bundle đã chuẩn bị như
+ENVIRONMENT.md. Nếu copy cả prepared upstream có `.git`, không cần clone lại.
 
 ## 2. Smoke và benchmark standalone trước
 
@@ -28,6 +32,7 @@ Draft/config/mapping vẫn ở
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b bash scripts/smoke_benchmark.sh
+CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b bash scripts/smoke_parity.sh
 
 # Benchmark 2 fresh engine runs, cùng dataset/sampler/scheduler:
 CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b BENCHMARK_PROMPTS=128 \
@@ -36,6 +41,9 @@ CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b BENCHMARK_PROMPTS=128 \
 # Eager component profiling là pass riêng, không dùng để claim production tokens/s:
 CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b COMPONENT_PROFILE=1 \
   PAIR_DIR="$PWD/outputs/benchmarks/qwen25_3b_profile_seed42" bash benchmark_pair.sh
+
+# Grid batches1,2,4,8,16,32: production throughput + separate eager components
+CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b COMPONENT_PROFILE=1 bash scripts/benchmark_grid.sh
 ```
 
 PAIR_DIR phải chưa tồn tại; mặc định tự tạo timestamp unique. Outputs:

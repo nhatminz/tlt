@@ -50,10 +50,19 @@ source /tmp/tlt-wheel-builder/bin/activate
 PYTHON_BIN="$(command -v python)" INSTALL_RL=1 bash scripts/build_wheelhouse.sh
 ```
 
-Copy nguyên `TltReflex/` gồm `wheelhouse/`, `wheels/`, `upstream/` sang server.
-Không chỉ copy root scripts. Bundle mặc định hiện có source vendor và custom
-FlashInfer wheel, **không phải** toàn bộ 206 dependency wheels. Script builder
-tải/build toàn bộ phần còn lại, không cần git clone ở server.
+Checkout sạch không chứa upstream/wheels. Bootstrap/scripts tái tạo các artifacts
+từ pinned git source, SHA256-verified sdist và tracked patches. Online builder
+bootstrap chúng trước khi build/download full wheelhouse. Có thể copy nguyên
+folder đã chuẩn bị (`upstream/` phải gồm `.git` của fastrl) hoặc chỉ copy checkout,
+wheelhouse và offline git bundle:
+
+```bash
+PYTHON_BIN="$(command -v python)" bash scripts/create_offline_upstream_bundle.sh
+```
+
+Tạo bundle trên máy online; copy `artifacts/fastrl-bce3df7.bundle` sang server.
+Đặt `FASTRL_GIT_SOURCE` khi installer/bootstrap để clone local bundle, không cần
+internet. Unit tests không cần download/build FlashInfer wheel.
 
 Trên server có Python3.12 sẵn:
 
@@ -62,7 +71,8 @@ cd /workspace/storage-shared/nlp/minhpn19/TltReflex
 python3.12 -m venv .venv-tlt
 source .venv-tlt/bin/activate
 export PYTHON_BIN="$(command -v python)"
-OFFLINE=1 INSTALL_RL=1 WHEELHOUSE="$PWD/wheelhouse" bash scripts/install_environment.sh
+OFFLINE=1 INSTALL_RL=1 FASTRL_GIT_SOURCE="$PWD/artifacts/fastrl-bce3df7.bundle" \
+  WHEELHOUSE="$PWD/wheelhouse" bash scripts/install_environment.sh
 python -m pip check
 python scripts/validate_environment.py --rl
 ```
@@ -72,16 +82,34 @@ prerequisites, wheelhouse không tự cài chúng. Nên đặt venv/JIT cache tr
 local để tránh shared storage treo khi dlopen thư viện CUDA, như lỗi trước đó.
 Không dùng cache tạm từ machine khác/architecture khác cho compiled GPU kernels.
 
-## FlashInfer mandatory ABI backport
+## FlashInfer exact0.4.0 ABI adapter (corrected after review)
 
 Public FlashInfer0.4.0 yêu cầu `apache-tvm-ffi==0.1.0b15` đã bị gỡ khỏi PyPI.
 Không thể resolve reproducibly bằng wheel public nguyên bản. `upstream/flashinfer`
-là official0.4.0 sdist + official PR1960 C++ TensorView ABI migration sang stable
-FFI0.1.0, cùng build/runtime metadata tương ứng. Không đổi CUDA sampling math.
-Không phải chỉ sửa version check hay dùng `--no-deps` để che incompatibility.
-Bundled wheel đã build thành công trên Python3.12; checksum/provenance ở
-`PROVENANCE.json`; native JIT/runtime smoke còn phải kiểm tra trên B200.
-Nguồn: https://github.com/flashinfer-ai/flashinfer/pull/1960 .
+là official0.4.0 sdist + `patches/flashinfer_stable_ffi.patch`, metadata và
+typed owning-Tensor accessor shim. Stable FFI0.1.0 `Tensor::operator->`
+trả Object* thay vì TensorObj*; shim dùng typed `get()`, giữ nguyên object
+ownership/FFI type/underlying data pointer và CUDA sampling math.
+Claim trước đây “full official PR1960 applied” là **không chính xác**: PR đó
+target một TensorView revision khác, không apply trực tiếp lên exact sdist này.
+Reference liên quan: https://github.com/flashinfer-ai/flashinfer/pull/1960 .
+
+```bash
+bash scripts/bootstrap_flashinfer.sh
+python scripts/check_flashinfer_abi.py
+```
+
+Đã kiểm tra host C++ accessor/type registration và gọi real TVM-FFI function
+trên NumPy tensor (shape/data pointer alias đúng); chưa compile toàn bộ native
+CUDA JIT. Wheel rebuild có thể khác SHA do metadata/timestamps; auditor kiểm
+tra code ABI thực đóng gói so với tracked hashes, không bắt một hash chỉ có
+ở máy developer. Build scripts tạo wheel trước khi install pinned requirements.
+Offline muốn bootstrap source riêng: `FLASHINFER_ARCHIVE` trỏ official verified
+sdist; nếu đã có verified wheelhouse thì installer không cần sdist.
+
+Nếu folder cũ có fastrl extracted nhưng không `.git`, bootstrap từ chối overwrite.
+Chủ động backup nó trước (`mv upstream upstream.legacy.<your-run-id>`) rồi bootstrap;
+không dùng reset/rm để che sai source identity.
 
 Tái tạo lock (online, dùng uv, không cần cho offline install):
 

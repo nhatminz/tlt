@@ -1,0 +1,179 @@
+diff --git a/csrc/flashinfer_norm_binding.cu b/csrc/flashinfer_norm_binding.cu
+--- a/csrc/flashinfer_norm_binding.cu
++++ b/csrc/flashinfer_norm_binding.cu
+@@ -15,7 +15,7 @@
+  */
+ #include "tvm_ffi_utils.h"
+ 
+-using tvm::ffi::Tensor;
++using flashinfer_ffi::Tensor;
+ 
+ void rmsnorm(Tensor out, Tensor input, Tensor weight, double eps, bool enable_pdl);
+ 
+diff --git a/csrc/flashinfer_page_binding.cu b/csrc/flashinfer_page_binding.cu
+--- a/csrc/flashinfer_page_binding.cu
++++ b/csrc/flashinfer_page_binding.cu
+@@ -15,7 +15,7 @@
+  */
+ #include "tvm_ffi_utils.h"
+ 
+-using tvm::ffi::Tensor;
++using flashinfer_ffi::Tensor;
+ 
+ void append_paged_kv_cache(Tensor append_key, Tensor append_value, Tensor batch_indices,
+                            Tensor positions, Tensor paged_k_cache, Tensor paged_v_cache,
+diff --git a/csrc/flashinfer_rope_binding.cu b/csrc/flashinfer_rope_binding.cu
+--- a/csrc/flashinfer_rope_binding.cu
++++ b/csrc/flashinfer_rope_binding.cu
+@@ -15,7 +15,7 @@
+  */
+ #include "tvm_ffi_utils.h"
+ 
+-using tvm::ffi::Tensor;
++using flashinfer_ffi::Tensor;
+ 
+ void apply_rope(Tensor q, Tensor k, Tensor q_rope, Tensor k_rope, Tensor indptr, Tensor offsets,
+                 int64_t rotary_dim, bool interleave, double rope_scale, double rope_theta);
+diff --git a/csrc/norm.cu b/csrc/norm.cu
+--- a/csrc/norm.cu
++++ b/csrc/norm.cu
+@@ -19,7 +19,7 @@
+ 
+ using namespace flashinfer;
+ 
+-using tvm::ffi::Tensor;
++using flashinfer_ffi::Tensor;
+ 
+ void rmsnorm(Tensor output, Tensor input, Tensor weight, double eps, bool enable_pdl) {
+   CHECK_LAST_DIM_CONTIGUOUS_INPUT(input);
+diff --git a/csrc/nv_internal/tensorrt_llm/thop/fp4Op.cpp b/csrc/nv_internal/tensorrt_llm/thop/fp4Op.cpp
+--- a/csrc/nv_internal/tensorrt_llm/thop/fp4Op.cpp
++++ b/csrc/nv_internal/tensorrt_llm/thop/fp4Op.cpp
+@@ -32,7 +32,7 @@
+ using tvm::ffi::Array;
+ using tvm::ffi::Map;
+ using tvm::ffi::Optional;
+-using tvm::ffi::Tensor;
++using flashinfer_ffi::Tensor;
+ 
+ static int getExp(float v) {
+   int vIntRepr;
+diff --git a/csrc/nv_internal/tensorrt_llm/thop/fp4Quantize.h b/csrc/nv_internal/tensorrt_llm/thop/fp4Quantize.h
+--- a/csrc/nv_internal/tensorrt_llm/thop/fp4Quantize.h
++++ b/csrc/nv_internal/tensorrt_llm/thop/fp4Quantize.h
+@@ -24,7 +24,7 @@
+ #include "tensorrt_llm/thop/utils.h"
+ 
+ using tvm::ffi::Optional;
+-using tvm::ffi::Tensor;
++using flashinfer_ffi::Tensor;
+ using tvm::ffi::Tuple;
+ 
+ void fp4_quantize(Tensor self, Optional<Tensor> const& globalScale, Tensor valueE2M1,
+diff --git a/csrc/nv_internal/tensorrt_llm/thop/fp8Quantize.h b/csrc/nv_internal/tensorrt_llm/thop/fp8Quantize.h
+--- a/csrc/nv_internal/tensorrt_llm/thop/fp8Quantize.h
++++ b/csrc/nv_internal/tensorrt_llm/thop/fp8Quantize.h
+@@ -22,7 +22,7 @@
+ #include "tensorrt_llm/kernels/quantization.h"
+ #include "tensorrt_llm/thop/utils.h"
+ 
+-using tvm::ffi::Tensor;
++using flashinfer_ffi::Tensor;
+ using tvm::ffi::Tuple;
+ 
+ // colIdx and totalCloumn should be in SFMatrix, not activation Matrix, so no sfVecSize needed.
+diff --git a/csrc/page.cu b/csrc/page.cu
+--- a/csrc/page.cu
++++ b/csrc/page.cu
+@@ -19,7 +19,7 @@
+ 
+ using namespace flashinfer;
+ 
+-using tvm::ffi::Tensor;
++using flashinfer_ffi::Tensor;
+ 
+ void append_paged_kv_cache(Tensor append_key, Tensor append_value, Tensor batch_indices,
+                            Tensor positions, Tensor paged_k_cache, Tensor paged_v_cache,
+diff --git a/csrc/rope.cu b/csrc/rope.cu
+--- a/csrc/rope.cu
++++ b/csrc/rope.cu
+@@ -19,7 +19,7 @@
+ 
+ using namespace flashinfer;
+ 
+-using tvm::ffi::Tensor;
++using flashinfer_ffi::Tensor;
+ 
+ void apply_rope(Tensor q, Tensor k, Tensor q_rope, Tensor k_rope, Tensor indptr, Tensor offsets,
+                 int64_t rotary_dim, bool interleave, double rope_scale, double rope_theta) {
+diff --git a/csrc/tvm_ffi_utils.h b/csrc/tvm_ffi_utils.h
+--- a/csrc/tvm_ffi_utils.h
++++ b/csrc/tvm_ffi_utils.h
+@@ -15,6 +15,7 @@
+  */
+ #pragma once
+ #include <tvm/ffi/container/tensor.h>
++#include "tlt_legacy_tensor.h"
+ #include <tvm/ffi/dtype.h>
+ #include <tvm/ffi/error.h>
+ #include <tvm/ffi/extra/c_env_api.h>
+@@ -22,8 +23,8 @@
+ 
+ #include "dlpack/dlpack.h"
+ 
+-using tvm::ffi::Tensor;
+-namespace ffi = tvm::ffi;
++using flashinfer_ffi::Tensor;
++namespace ffi = flashinfer_ffi;
+ 
+ inline constexpr int64_t encode_dlpack_dtype(DLDataType dtype) {
+   return (dtype.code << 16) | (dtype.bits << 8) | dtype.lanes;
+@@ -218,7 +219,7 @@
+     }                                        \
+   }()
+ 
+-inline void check_shape(const tvm::ffi::Tensor& a, const tvm::ffi::Tensor& b, const char* a_name,
++inline void check_shape(const flashinfer_ffi::Tensor& a, const flashinfer_ffi::Tensor& b, const char* a_name,
+                         const char* b_name) {
+   TVM_FFI_ICHECK_EQ(a->ndim, b->ndim) << a_name << "->ndim and " << b_name << "->ndim mismatch";
+   for (int i = 0; i < a->ndim; ++i) {
+diff --git a/pyproject.toml b/pyproject.toml
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -27,7 +27,7 @@
+ flashinfer = "flashinfer.__main__:cli"
+ 
+ [build-system]
+-requires = ["setuptools>=77", "packaging>=24", "apache-tvm-ffi==0.1.0b15"]
++requires = ["setuptools>=77", "packaging>=24", "apache-tvm-ffi==0.1.0"]
+ build-backend = "build_backend"
+ backend-path = ["."]
+ 
+diff --git a/requirements.txt b/requirements.txt
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,4 +1,4 @@
+-apache-tvm-ffi==0.1.0b15
++apache-tvm-ffi==0.1.0
+ click
+ einops
+ ninja
+diff --git a/csrc/tlt_legacy_tensor.h b/csrc/tlt_legacy_tensor.h
+--- /dev/null
++++ b/csrc/tlt_legacy_tensor.h
+@@ -0,0 +1,15 @@
++// FlashInfer0.4.0 expects a typed Tensor::operator->; stable TVM-FFI0.1
++// returns Object* there. Restore the legacy accessor without tensor copies,
++// changes to allocation ownership, or changes to CUDA kernel math.
++#pragma once
++#include <tvm/ffi/container/tensor.h>
++namespace flashinfer_ffi {
++using namespace tvm::ffi;
++class Tensor : public tvm::ffi::Tensor {
++ public:
++  using tvm::ffi::Tensor::Tensor;
++  Tensor() = default;
++  Tensor(tvm::ffi::Tensor value) : tvm::ffi::Tensor(std::move(value)) {}
++  const ContainerType* operator->() const { return get(); }
++};
++}  // namespace flashinfer_ffi

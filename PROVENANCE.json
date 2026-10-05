@@ -14,18 +14,44 @@
       "third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py",
       "third-party/sglang/python/sglang/srt/managers/scheduler.py",
       "verl/trainer/constants_ppo.py"
-    ]
+    ],
+    "patched_sha256": {
+      "third-party/sglang/python/sglang/srt/speculative/eagle_worker.py": "4cd8cbe66cb6519098817e041de4a559a589d39bd71b19c046c798b6a2047ea6",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_info.py": "4ff263cb68c2f29b196786f48154bb308403f0e20e950af830ce19f6d0a1be95",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py": "9bac71cdafad43da8d351d22c297717aced16081d29bba45ac25bb6e8bb79ee3",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py": "03c25ecf587559aa7bcaab58997026f4ac0e59b757cb9d7d1b15b92380e70d11",
+      "third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py": "90bef00df0971606a558cbfe84632f38b6f399539d92e805cb4508809bc28c45",
+      "third-party/sglang/python/sglang/srt/managers/scheduler.py": "5f26850306b222507f2e9d013f9e11af28ef679237e670b38d01a6fe996e9aba",
+      "verl/trainer/constants_ppo.py": "a06a8a6893919ba9c740c2301fa1b76ece67d596c80892211981040377d03d2f"
+    },
+    "reflex_patch_sha256": "e7b2899b58ad48a3bf0ebf1cc9e4d33228ca0e543f89648510fb3bb53eaef9d9"
   },
   "flashinfer": {
     "version": "0.4.0",
     "sdist_sha256": "c6e4ba1dc1300e17eb8a15c028bc1d79bd7416c9895d32e021430b47674c6c41",
-    "stable_ffi_backport": "https://github.com/flashinfer-ai/flashinfer/pull/1960",
+    "related_upstream_ffi_migration_reference_not_applied": "https://github.com/flashinfer-ai/flashinfer/pull/1960",
     "upstream_merge_commit": "0e48aaf941a6b05f6557c9c9f606884f826afedd",
     "upstream_diff_sha256": "617fd72807aaf01c630a74e56cfa9cec71349366681e7e1a9f4d15e639facbc6",
     "ffi_version": "0.1.0",
-    "reason": "public 0.4.0 requires removed 0.1.0b15; apply official C++ TensorView ABI migration plus update build/runtime metadata, NOT a metadata-only bypass",
-    "excluded_patch_paths": [".github", "flashinfer-cubin/pyproject.toml", "flashinfer-jit-cache/pyproject.toml", "csrc/trtllm_low_latency_gemm_runner.cu (absent from 0.4.0 sdist)"],
-    "wheel_sha256": "69f9a29768a18dd2a14dac795abf42a83cbe598d76c2227ac3ddb5ca218825ce"
+    "reason": "Exact0.4.0 sdist uses owning Tensor; stable0.1.0 loses typed operator->. Local accessor compatibility shim restores typed get() and preserves ownership/FFI type. No CUDA math changes. PR1960 targets a different TensorView source revision and was NOT applicable; earlier claim corrected.",
+    "wheel_sha256": "164cc8d78b8e697f41183d5ef5af0b1fabcf5b1925d73c06dabe98b2503b59af",
+    "local_patch_sha256": "1cb864bf3c41d257362ae76fa6f3efd298baf13131c3b861bffd534c16a56146",
+    "sdist_url": "https://files.pythonhosted.org/packages/08/29/f5609be182174e8c97124baeb90bb955fe05e2e1353776f48e226c153214/flashinfer_python-0.4.0.tar.gz",
+    "patched_sha256": {
+      "csrc/flashinfer_norm_binding.cu": "86d87613553cfc8705002263b6de8fe1f3ebe1d710bb650d96d6e5c82721c8f1",
+      "csrc/flashinfer_page_binding.cu": "72c4f1d793ff7e76dd5071eb57073172256455a9f8f89cd4f4d57082bcf4436a",
+      "csrc/flashinfer_rope_binding.cu": "42cd6202a1deb8d9d986c4be5e16c4f9657a3d19741db70793d2b351ecef8456",
+      "csrc/norm.cu": "60b0084b69b89a06f65336062fc4fc27da314751c6d5d8e38a6efc8bb1f802a5",
+      "csrc/nv_internal/tensorrt_llm/thop/fp4Op.cpp": "f9e85025da728936042e40cc693a68bee250cde45b105bf627e43527755f4c56",
+      "csrc/nv_internal/tensorrt_llm/thop/fp4Quantize.h": "25d5c200ba4c7b2b4d92676b4382ab2ef55cd55fdf3dec7138f76b281aeff884",
+      "csrc/nv_internal/tensorrt_llm/thop/fp8Quantize.h": "54290c19d986713fb6bb3a0f5c9f525b6dd27fead8246676107fcc4e004e5fb3",
+      "csrc/page.cu": "ef6bd448b9955144ccbe14b18029f365f66535e5590d7f83e15681fdfaafdcd9",
+      "csrc/rope.cu": "7e6f555220062d2e5a88ca7248b40b64a9c7b2273c12ceb893708fda80e01163",
+      "csrc/tvm_ffi_utils.h": "412734dd23f53039be91b4cebf6255e920aa9c67ddc7058c87b1f30cc530166e",
+      "pyproject.toml": "1130030f3d4ba67203c5d1704ac867d34ff55b642a18e4c79c485fc25f3e10b3",
+      "requirements.txt": "aeaea95365427f86005dbc126cc2817884104a213b6f3b5ab0695b472f47c404",
+      "csrc/tlt_legacy_tensor.h": "11ec5e71e503061fca6212cc87be25247a706a7d391786392d24a77446927d49"
+    }
   },
   "reflex_source": "SpecNaacl/helper/fast_lk_reflex.py and fast_lk_reflex_kernels.py; analytic root-feedback LK loss gradient, FP32 state; ported to request slots",
   "dependency_lock": "requirements.txt: 206 exact pins, CUDA Python/bindings12.8 matching Torch cu128; resolved against upstream metadata with exclude-newer 2026-02-28; full runtime pip check not yet run"

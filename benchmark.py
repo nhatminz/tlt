@@ -55,6 +55,18 @@ def metric_delta(after,before):
             for kind in ('times_ms','counters')}
 
 
+def engine_request_capacity(a):
+    capacity=a.batch_size*a.responses
+    if a.mab_configs and a.mab in ('BEG','PREDEFINED'):
+        # Upstream eagerly captures ALL bucket strategies. A batch1 engine
+        # limited to one slot would have an empty capture set for bucket21+.
+        # Reserve capacity, not extra requests; both methods submit identical
+        # B*n responses. No change to BEG thresholds/strategy selection.
+        minimum=max(map(int,a.mab_buckets.split(',')))
+        capacity=max(capacity,1<<(minimum-1).bit_length())
+    return capacity
+
+
 def main(argv=None):
     a=parse_args(argv)
     if a.validate_config:
@@ -66,11 +78,12 @@ def main(argv=None):
     sg=require_runtime()
     import torch
     from transformers import AutoTokenizer
-    from tlt_reflex.data import load_rows,prompt_messages
+    from tlt_reflex.data import load_rows,prompt_messages,resolve_data_source
     rows=load_rows(a.dataset)[:a.prompts]
     if not rows:raise ValueError('empty prompt pool')
     tokenizer=AutoTokenizer.from_pretrained(a.model,local_files_only=True)
-    prompts=tokenizer.apply_chat_template([prompt_messages(r['question']) for r in rows],
+    messages=[prompt_messages(r['question'],resolve_data_source(r.get('data_source'),path=a.dataset)) for r in rows]
+    prompts=tokenizer.apply_chat_template(messages,
                                          tokenize=False,add_generation_prompt=True)
     prompts=[tokenizer.encode(x)[:a.max_prompt_length] for x in prompts]
     engine_args=dict(model_path=a.model,speculative_algorithm='EAGLE3',speculative_draft_model_path=a.draft,
@@ -78,9 +91,9 @@ def main(argv=None):
         speculative_num_steps=a.steps,speculative_eagle_topk=a.draft_topk,
         speculative_num_draft_tokens=a.tree_tokens,
         apdative_speculative_batch_size_threshold=a.sd_threshold,
-        speculative_eagle_mab_algorithm=a.mab,speculative_eagle_mab_configs=a.mab_configs.split(','),
+        speculative_eagle_mab_algorithm=a.mab,speculative_eagle_mab_configs=a.mab_configs.split(',') if a.mab_configs else [],
         speculative_mab_bs_threshold=list(map(int,a.mab_buckets.split(','))),
-        max_running_requests=a.batch_size*a.responses,cuda_graph_max_bs=a.batch_size*a.responses,
+        max_running_requests=engine_request_capacity(a),cuda_graph_max_bs=engine_request_capacity(a),
         context_length=a.max_prompt_length+a.max_new_tokens+a.steps+1,
         attention_backend=a.attention_backend,mem_fraction_static=a.memory_fraction,
         disable_cuda_graph=a.disable_cuda_graph)
@@ -97,6 +110,7 @@ def main(argv=None):
             elapsed+=time.perf_counter()-begin  # synchronous generate includes completion
             collected.extend(outputs)
         final=engine.get_server_info()
+        final_metrics=(final.get('internal_states') or [{}])[0].get('tlt_reflex_metrics',{})
         delta=metric_delta(final,baseline)
         counters=delta['counters']; times=delta['times_ms']
         generated=sum(o['meta_info']['completion_tokens'] for o in collected)
@@ -113,10 +127,15 @@ def main(argv=None):
             verified_aal=(accepted+seq_rounds)/seq_rounds if seq_rounds else None,
             draft_acceptance_rate=accepted/proposed if proposed else None,
             proposal_time_ms=times.get('proposal_ms') if a.profile else None,
+            draft_extend_time_ms=times.get('draft_extend_ms',0.) if a.profile else None,
+            proposal_latency_total_ms=sum(times.get(k,0.) for k in ('proposal_ms','draft_extend_ms')) if a.profile else None,
+            proposal_correction_time_ms=times.get('reflex_correction_ms',0.) if a.profile else None,
             verification_time_ms=times.get('verification_ms') if a.profile else None,
             reflex_update_time_ms=times.get('reflex_update_ms',0.) if a.profile else None,
             reflex_overhead_ms=sum(times.get(k,0.) for k in ('reflex_feature_ms','reflex_correction_ms','reflex_cache_ms','reflex_update_ms')) if a.profile else None,
             phase_times_ms=times,server_info=final,
+            reflex_state_memory_mb=final_metrics.get('reflex_state_memory_mb'),
+            reflex_buffer_memory_mb=final_metrics.get('reflex_buffer_memory_mb'),
             note='Throughput pass is unprofiled. Eager component pass is separate; MAB timing-driven strategy/trajectories may differ. No added target forward/sampling. Overlapping intervals cannot infer net wall overhead.')
         path=Path(a.output);path.parent.mkdir(parents=True,exist_ok=True)
         path.write_text(json.dumps(report,indent=2)+'\n')

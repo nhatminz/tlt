@@ -1,10 +1,33 @@
 # TltReflex: official FastRL/TLT + request-local FastLKReflex
 
 Hai mode dùng cùng pipeline: `METHOD=tlt` và `METHOD=tlt_reflex`.
+Mode hiện tại là **TLT adaptive speculative rollout + fixed pretrained EAGLE3**,
+chưa phải full Spot-Trainer TLT. Cả hai mode giữ Spot Trainer OFF.
+“Fixed” là các drafter tensors train riêng không được Spot update; target
+embedding vẫn được share theo upstream và thay đổi theo target GRPO updates.
 Không sửa `../SpecNaacl`; draft pretrained vẫn đọc từ folder đó.
 Code FastRL chính thức đã được vendor ở `upstream/fastrl`, commit
 `bce3df7a4d46473912e9b81bf47bca419729557f`. Không dùng PyPI SGLang thay fork TLT.
 Nguồn: https://github.com/mit-han-lab/fastrl .
+
+## Reproduce từ checkout sạch
+
+`upstream/` và wheels là artifacts được tái tạo, không phải source chỉ có trên
+máy developer. Các patch và provenance được track trong repo:
+
+```bash
+./scripts/bootstrap_upstream.sh
+python -m pytest -q
+```
+
+Bootstrap clone official repo, checkout đúng commit, giữ pristine trước patch,
+apply/check/reverse-check `patches/fastrl_reflex.patch`, xác nhận SHA256 của
+từng file đã sửa và diff file set. Không reset/overwrite tree đang có.
+Pytest tự bootstrap source nếu thiếu (không pip-install/model download).
+Server offline: tạo `scripts/create_offline_upstream_bundle.sh` trên máy online,
+copy git bundle rồi dùng `FASTRL_GIT_SOURCE=/actual/path/to/bundle` với bootstrap.
+Installer/wheelhouse builder bootstrap source và FlashInfer ABI artifact riêng;
+unit tests không cần wheel/FlashInfer/CUDA environment đầy đủ.
 
 ## Implementation
 
@@ -88,6 +111,13 @@ BEG/MAB, optimizer, reward hoặc GRPO objective của upstream.
 `report.json` + `report.responses.jsonl` trong output mỗi run, gồm accepted/
 proposed draft tokens, sequence verification rounds, AAL, tokens/s, elapsed,
 memory RPC, config và server info. Warmup không nằm trong measured deltas.
+Thêm `reflex_state_memory_mb` (A only, decimal MB),
+`reflex_buffer_memory_mb` (tất cả owned preallocated buffers),
+`proposal_correction_time_ms`, `draft_extend_time_ms`,
+`proposal_latency_total_ms = proposal_time_ms + draft_extend_time_ms`.
+Proposal total gồm initial/root extend và post-verification extend, không
+chỉ tính deep draft loop. Correction/update/profile times chỉ có ở pass eager
+opt-in; production pass để null, không tạo số đo giả.
 
 - `upstream_aal = total completion_tokens / sum(response.spec_verify_ct)`:
   định nghĩa chính benchmark FastRL; numerator có cả normal decode/prefill
@@ -117,3 +147,29 @@ Enable=true báo lỗi trước khi chạy. Repo **chưa tích hợp EAGLE3 oppo
 online draft training**; không tự gọi một trainer khác là TLT/SpecForge.
 Chưa kiểm chứng engine/model benchmark B200 hoặc end-to-end RL tại máy này.
 Xem [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) cho evidence/test limits.
+
+## RL reward data fix
+
+Data conversion preserve valid original math identifiers; nếu thiếu/legacy
+invalid, map đúng family: DAPO→`math_dapo`, GSM8K→`openai/gsm8k`,
+MATH/simplelr→`lighteval/MATH`. Unknown family phải có `REWARD_DATA_SOURCE`
+explicit, không fallback tất cả thành `math`. Ground truth không bọc boxed
+cho GSM8K/MATH. Reward upstream không sửa: format final line GSM8K=`#### ...`,
+DAPO/AIME=`Answer: ...` (upstream Minerva default), MATH giữ boxed answer.
+Hai mode và benchmark dùng cùng formatting này. Tests gọi actual pinned
+dispatcher và scoring modules, kiểm tra cả positive reward, không chỉ tên.
+
+## Server validation
+
+```bash
+bash scripts/smoke_benchmark.sh          # adaptive TLT vs active Reflex
+bash scripts/smoke_parity.sh             # fixed-strategy greedy OFF / LR0 / active
+COMPONENT_PROFILE=1 bash scripts/benchmark_grid.sh # batches1,2,4,8,16,32
+```
+
+Responses mặc định vẫn8; grid batch size là số prompts, request concurrency
+=batch×responses. Fixed/greedy identity diagnostic không phải adaptive speed
+benchmark; cùng seed trong adaptive MAB không bảo đảm same strategy/output.
+Engine reserve tối thiểu32 request slots khi dùng default BEG buckets1/2/5/21,
+để upstream capture cả bucket21+ không bị max(empty) ở smoke batch1. Đây là
+capacity chung của hai mode, không tạo thêm responses/concurrency thực.

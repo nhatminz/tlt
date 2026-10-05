@@ -122,3 +122,27 @@ def test_fp32_state_is_not_changed_by_global_default_dtype():
         for name in ('a','q','psi','root_out','deep_out','mass','stats','root_feature','deep_feature'):
             assert getattr(s,name).dtype==torch.float32
     finally:torch.set_default_dtype(previous)
+
+
+@pytest.mark.parametrize('device',DEVICES)
+def test_zero_lr_feedback_leaves_full_proposal_identity_across_reorder_and_reuse(device):
+    s=create(device);s.lr=0.
+    slots=torch.tensor([5,1,3],device=device,dtype=torch.int32)
+    raw=torch.randn(3,19,device=device);h=torch.randn(3,12,device=device)
+    pointer=[t.data_ptr() for t in (s.a,s.q,s.psi,s.root_out,s.deep_out,s.mass,s.stats)]
+    teacher=torch.randn(3,4,38,device=device).softmax(-1)
+    roots=torch.tensor([[0,1],[4,5],[8,9]],device=device,dtype=torch.int32)[:,0]
+    teacher_before=teacher.clone()
+    for _ in range(4):
+        corrected=s.correct(raw,h,slots,root=True)
+        assert torch.equal(corrected,raw)
+        s.cache_root(corrected.softmax(-1),slots)
+        s.feedback(teacher,roots,slots)
+        assert not s.a.any() and torch.equal(teacher,teacher_before)
+    s.reset_slots(1,allocated=False)
+    assert not s.a[1].any() and not s.q[1].any() and not s.psi[1].any()
+    s.reset_slots(1,allocated=True)
+    reorder=slots[[2,0,1]]
+    corrected=s.correct(raw,h,reorder,root=True)
+    assert torch.equal(corrected.softmax(-1).topk(4).indices,raw.softmax(-1).topk(4).indices)
+    assert pointer==[t.data_ptr() for t in (s.a,s.q,s.psi,s.root_out,s.deep_out,s.mass,s.stats)]

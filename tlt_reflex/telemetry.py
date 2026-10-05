@@ -9,6 +9,8 @@ class Meter:
         self.pending=[]
         self.totals={}
         self.counters=dict(sequence_verification_rounds=0,accepted_draft_tokens=0,proposed_draft_tokens=0)
+        self.reflex_state_memory_mb=0.
+        self.reflex_buffer_memory_mb=0.
     @contextmanager
     def section(self,key):
         active=self.enabled and not torch.cuda.is_current_stream_capturing()
@@ -30,6 +32,8 @@ class Meter:
             self.totals[key]=self.totals.get(key,0.)+a.elapsed_time(b)
         self.pending.clear()
         return dict(times_ms=self.totals.copy(),counters=self.counters.copy(),
+                    reflex_state_memory_mb=self.reflex_state_memory_mb,
+                    reflex_buffer_memory_mb=self.reflex_buffer_memory_mb,
                     profile_enabled=self.enabled,graph_inner_times_available=False,
                     gpu_memory=dict(allocated_gb=torch.cuda.memory_allocated()/2**30,
                         reserved_gb=torch.cuda.memory_reserved()/2**30,

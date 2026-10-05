@@ -54,7 +54,10 @@ if [[ "${DRY_RUN:-false}" == true ]];then "${cmd[@]}" --validate-config;exit 0;f
 prepare_runtime_draft
 "$PYTHON_BIN" "$ROOT/scripts/validate_environment.py" --rl
 if [[ ! -f "$RL_DATA" ]];then
-  "$PYTHON_BIN" "$ROOT/scripts/prepare_rl_data.py" --input "$DATASET_PATH" --output "$RL_DATA"
+  data_args=(--input "$DATASET_PATH" --output "$RL_DATA" --dataset "$DATASET")
+  if [[ -n "${REWARD_DATA_SOURCE:-}" ]];then data_args+=(--data-source "$REWARD_DATA_SOURCE");fi
+  "$PYTHON_BIN" "$ROOT/scripts/prepare_rl_data.py" "${data_args[@]}"
 fi
+"$PYTHON_BIN" "$ROOT/scripts/validate_rl_data.py" --input "$RL_DATA"
 mkdir -p "$RUN_DIR/logs"
 "${cmd[@]}" 2>&1 | tee "$RUN_DIR/logs/console.log"
