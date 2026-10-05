@@ -1,0 +1,3 @@
+# Mandatory for official FastRL FSDP RL; not needed for standalone Triton-attention benchmark.
+# Exact official upstream README wheel: Python3.12 / torch2.8 / cu12 / CXX11 ABI.
+https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl

@@ -1,0 +1,4 @@
+# FlashInfer official PR1960: replace removed beta TVM-FFI requirement with
+# stable v0.1.0. The FULL official FFI compatibility patch is required, not
+# just editing package metadata; no numerical/decoding algorithm changes.
+apache-tvm-ffi==0.1.0

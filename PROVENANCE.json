@@ -1,0 +1,32 @@
+{
+  "fastrl": {
+    "repository": "https://github.com/mit-han-lab/fastrl",
+    "commit": "bce3df7a4d46473912e9b81bf47bca419729557f",
+    "commit_time": "2026-02-27T02:36:36Z",
+    "archive_sha256": "09f476cb28e8838ad399db989de968c5b0e55a35197950b3b5d497033c71b106",
+    "sglang_version": "0.5.3.post2",
+    "sglang_source": "included third-party/sglang tree at the same FastRL commit; NOT PyPI SGLang",
+    "modified_files": [
+      "third-party/sglang/python/sglang/srt/speculative/eagle_worker.py",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_info.py",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py",
+      "third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py",
+      "third-party/sglang/python/sglang/srt/managers/scheduler.py",
+      "verl/trainer/constants_ppo.py"
+    ]
+  },
+  "flashinfer": {
+    "version": "0.4.0",
+    "sdist_sha256": "c6e4ba1dc1300e17eb8a15c028bc1d79bd7416c9895d32e021430b47674c6c41",
+    "stable_ffi_backport": "https://github.com/flashinfer-ai/flashinfer/pull/1960",
+    "upstream_merge_commit": "0e48aaf941a6b05f6557c9c9f606884f826afedd",
+    "upstream_diff_sha256": "617fd72807aaf01c630a74e56cfa9cec71349366681e7e1a9f4d15e639facbc6",
+    "ffi_version": "0.1.0",
+    "reason": "public 0.4.0 requires removed 0.1.0b15; apply official C++ TensorView ABI migration plus update build/runtime metadata, NOT a metadata-only bypass",
+    "excluded_patch_paths": [".github", "flashinfer-cubin/pyproject.toml", "flashinfer-jit-cache/pyproject.toml", "csrc/trtllm_low_latency_gemm_runner.cu (absent from 0.4.0 sdist)"],
+    "wheel_sha256": "69f9a29768a18dd2a14dac795abf42a83cbe598d76c2227ac3ddb5ca218825ce"
+  },
+  "reflex_source": "SpecNaacl/helper/fast_lk_reflex.py and fast_lk_reflex_kernels.py; analytic root-feedback LK loss gradient, FP32 state; ported to request slots",
+  "dependency_lock": "requirements.txt: 206 exact pins, CUDA Python/bindings12.8 matching Torch cu128; resolved against upstream metadata with exclude-newer 2026-02-28; full runtime pip check not yet run"
+}
