@@ -393,7 +393,7 @@ def _reduce(STATS,ROUND_WEIGHT,COUNTERS,N,FIELDS:tl.constexpr,BN:tl.constexpr):
 def _update(SELECTED,SELECTED_COUNT,IDS,G,U,CONTEXTS,ROUND_WEIGHT,B,BITS,ACTIVE,COUNT,
              ROW_MAP,
              ROWS,CACHE,K:tl.constexpr,R:tl.constexpr,
-             LR:tl.constexpr,BU:tl.constexpr,BR:tl.constexpr,HAS_ROW_MAP:tl.constexpr):
+             LR:tl.constexpr,BU:tl.constexpr,BR:tl.constexpr,HAS_ROW_MAP:tl.constexpr,CHANGED=None,HAS_CHANGED:tl.constexpr=False):
     worker=tl.program_id(0);stride=tl.num_programs(0)
     count=tl.load(SELECTED_COUNT)
     for ordinal in range(worker,count,stride):
@@ -407,7 +407,10 @@ def _update(SELECTED,SELECTED_COUNT,IDS,G,U,CONTEXTS,ROUND_WEIGHT,B,BITS,ACTIVE,
         denominator=tl.load(ROUND_WEIGHT)
         delta=-LR*tl.div_rn(g[:,None]*u[None,:],tl.where(denominator>0,denominator,1.))
         valid=(j<2*K)&(token>=0)&(denominator>0)
-        tl.atomic_add(B+tl.maximum(token[:,None],0)*R+r[None,:],delta,valid[:,None]&(r[None,:]<R))
+        before=tl.atomic_add(B+tl.maximum(token[:,None],0)*R+r[None,:],delta,valid[:,None]&(r[None,:]<R))
+        if HAS_CHANGED:
+            actual=valid[:,None]&(r[None,:]<R)&((before+delta)!=before)
+            if tl.sum(tl.sum(actual.to(tl.int32),axis=1),axis=0)>0:tl.atomic_or(CHANGED,1)
         changed=valid&(tl.sum((delta!=0).to(tl.int32),axis=1)>0)
         bit=1<<(token%32)
         old=tl.atomic_or(BITS+tl.maximum(token,0)//32,bit,changed)
@@ -561,7 +564,7 @@ def prepare_compact_teacher(state,tree,path,target,greedy=False,sampling_metadat
     return probs,ids,mass,raw
 
 
-def feedback(state,tree,path,target,greedy=False,sampling_metadata=None):
+def feedback(state,tree,path,target,greedy=False,sampling_metadata=None,apply_update=True):
     b,q=tree.parents.shape;n=b*q;k=state.topk;rank=state.rank
     weights=state.selected_weights[:n].view(b,q);kind=state.selected_kind[:n].view(b,q)
     compact=sampling_metadata is not None and len(sampling_metadata)==4
@@ -595,11 +598,15 @@ def feedback(state,tree,path,target,greedy=False,sampling_metadata=None):
             state.projector_delta,h,rank,32,32,triton.next_power_of_2(rank),num_warps=4,enable_fp_fusion=False)
         state.model.opd_projector_grad_sum.add_(state.projector_delta)
     if state.train_projector:state.model.opd_projector_grad_weight.add_(state.round_weight)
-    state.end(ticket);ticket=state.begin('opd_update_ms')
+    state.end(ticket)
+    if not apply_update:return
+    ticket=state.begin('opd_update_ms')
+    changed=getattr(state,'update_changed',None)
+    if changed is not None:changed.zero_()
     if state.fast_lr>0:
         _update[(min(n,32),)](state.selected_ids,state.selected_count,state.union_ids,state.union_g,state.u_cache,tree.feedback_contexts,state.round_weight,
             state.B_fast,state.bitmap,state.active_ids,state.active_count,row_map,q,state.cache_contexts,k,rank,
-            state.fast_lr,triton.next_power_of_2(2*k),triton.next_power_of_2(rank),row_map is not None,num_warps=4,enable_fp_fusion=False)
+            state.fast_lr,triton.next_power_of_2(2*k),triton.next_power_of_2(rank),row_map is not None,CHANGED=changed,HAS_CHANGED=changed is not None,num_warps=4,enable_fp_fusion=False)
     _round_end[(1,)](state.B_fast,state.bitmap,state.active_ids,
         state.active_count,state.round_weight,state.counters,rank,state.fast_lr,128,triton.next_power_of_2(rank),num_warps=4)
     state.end(ticket)

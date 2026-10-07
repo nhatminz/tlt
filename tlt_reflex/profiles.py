@@ -14,7 +14,7 @@ def fingerprint(device=None,*,source=False):
     digest=manifest['proposal_source_fingerprint']
     if not source:
         h=hashlib.sha256(digest.encode())
-        for name in ('kernels.py','ported/opd_reflex_kernels.py','ported/merge.py'):
+        for name in ('kernels.py','dispatch.py','state.py','ported/opd_reflex_kernels.py','ported/merge.py'):
             h.update((ROOT/'tlt_reflex'/name).read_bytes())
         digest=h.hexdigest()
     return dict(gpu=torch.cuda.get_device_name(device),compute_capability=list(torch.cuda.get_device_capability(device)),

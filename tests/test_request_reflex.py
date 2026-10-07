@@ -159,7 +159,7 @@ def test_root_refresh_handles_shared_b_change_between_scheduler_batches(device):
     s=create(device);slots=torch.tensor([5,1],device=device,dtype=torch.int32)
     head=torch.randn(2,12,device=device);raw=head@s.head.weight.T
     s.propose(raw,head,slots,topk=4)
-    s.B_fast[0]=.2*(head[0]@s.projector);s.active_count.fill_(1);s.active_ids[0]=0;s.bitmap[0]=1
+    s.B_fast[0]=.2*(head[0]@s.projector);s.B_version.add_(1);s.active_count.fill_(1);s.active_ids[0]=0;s.bitmap[0]=1
     draft=NS();s.refresh_root(draft,slots,4)
     expected=(raw.float()+(head.float()@s.projector)@s.B_fast.T).softmax(-1).topk(4)
     assert torch.equal(draft.topk_index,expected.indices)
@@ -200,7 +200,7 @@ def test_proposals_bitwise_equal_original_specnaacl_triton(v):
         spec=importlib.util.spec_from_file_location('original_spec_opd',file);module=importlib.util.module_from_spec(spec)
         sys.modules[spec.name]=module;spec.loader.exec_module(module)
         s=create('cuda',v=v,mode='sparse')
-        s.score_workspace=torch.empty(s.max_proposal_rows*v,device='cuda')
+        s.score_workspace=torch.empty(s.max_proposal_rows*v,device='cuda');s.has_gemm=True
         raw=torch.randn(2,4,v,device='cuda');u=torch.randn(2,4,8,device='cuda')
         s.prepare_proposal_workspace=lambda *a:None
         for count in (0,1,v//4,v):

@@ -33,6 +33,7 @@ def configure(mode, *, pristine=False):
 
 def require_runtime(*, rl=False):
     import importlib
+    import importlib.util
     import importlib.metadata as metadata
     if sys.version_info[:2]!=(3,12):
         raise RuntimeError('pinned upstream TLT environment requires Python3.12, use a SEPARATE venv')
@@ -52,6 +53,9 @@ def require_runtime(*, rl=False):
     import shutil
     if shutil.which('nvcc') is None:
         raise RuntimeError('FlashInfer0.4 JIT needs CUDA toolkit/nvcc (12.8 for B200); a Torch CUDA runtime wheel alone is insufficient')
+    audit_spec=importlib.util.spec_from_file_location('tlt_source_audit',ROOT/'scripts/audit_upstream.py')
+    audit_module=importlib.util.module_from_spec(audit_spec);audit_spec.loader.exec_module(audit_module)
+    audit_module.audit(require_git=True)
     sg=importlib.import_module('sglang')
     if not Path(sg.__file__).resolve().is_relative_to(SGLANG):
         raise RuntimeError('wrong SGLang import; must use the official vendored TLT fork')

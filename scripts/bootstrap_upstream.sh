@@ -18,9 +18,9 @@ mkdir -p "$UPSTREAM_ROOT"
 if [[ -d "$UPSTREAM_ROOT/fastrl" ]];then
   if [[ ! -d "$UPSTREAM_ROOT/fastrl/.git" ]] || ! git -C "$UPSTREAM_ROOT/fastrl" apply --reverse --check "$PATCH" >/dev/null 2>&1;then
     if "$PYTHON_BIN" "$ROOT/scripts/upgrade_upstream.py" "$UPSTREAM_ROOT/fastrl";then
-      backup="$UPSTREAM_ROOT/../upstream.legacy.fast_lk.$(date -u +%Y%m%dT%H%M%S_%N)"
+      backup="$UPSTREAM_ROOT/../upstream.legacy.opd_upgrade.$(date -u +%Y%m%dT%H%M%S_%N)"
       mv "$UPSTREAM_ROOT/fastrl" "$backup"
-      echo "Recognized previous Fast-LK upstream saved at $backup"
+      echo "Recognized previous runtime saved at $backup"
     fi
   fi
 fi

@@ -175,7 +175,7 @@ index 574b129..3c32c74 100644
          if self.require_mlp_tp_gather:
              max_num_tokens = max(forward_batch.global_num_tokens_cpu)
 diff --git a/third-party/sglang/python/sglang/srt/speculative/eagle_info.py b/third-party/sglang/python/sglang/srt/speculative/eagle_info.py
-index 4373aa3..090a13e 100644
+index 4373aa3..2a470cb 100644
 --- a/third-party/sglang/python/sglang/srt/speculative/eagle_info.py
 +++ b/third-party/sglang/python/sglang/srt/speculative/eagle_info.py
 @@ -75,6 +75,9 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
@@ -188,20 +188,22 @@ index 4373aa3..090a13e 100644
      @classmethod
      def create_idle_input(cls, topk: int, spec_steps: int, num_verify_tokens: int):
          return cls(
-@@ -348,6 +351,13 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
-                 spec_steps=self.spec_steps,
-             )
+@@ -391,6 +394,15 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
+         if has_finished:
+             accept_length = (accept_index != -1).sum(dim=1) - 1
 
++        # OPD observes only the trajectory actually committed after EOS/stop/length.
 +        reflex = getattr(batch.req_to_token_pool, "_tlt_reflex", None)
 +        if reflex is not None:
 +            greedy_teacher = is_all_greedy or not TREE_SPEC_KERNEL_AVAILABLE
 +            reflex.feedback(target_predict if greedy_teacher else target_probs,
 +                accept_index, batch.req_pool_indices, self.opd_parents,
-+                self.opd_feedback_contexts, greedy=greedy_teacher)
++                self.opd_feedback_contexts, greedy=greedy_teacher,
++                finished_requests=([i for i in range(bs) if i not in unfinished_index] if has_finished else []))
 +
-         unfinished_index = []
-         unfinished_accept_index = []
-         accept_index_cpu = accept_index.tolist()
+         # Free the KV cache for unaccepted tokens
+         # TODO: fuse them
+         accept_index = accept_index[accept_index != -1]
 diff --git a/third-party/sglang/python/sglang/srt/speculative/eagle_worker.py b/third-party/sglang/python/sglang/srt/speculative/eagle_worker.py
 index 28aeb38..a385e95 100644
 --- a/third-party/sglang/python/sglang/srt/speculative/eagle_worker.py

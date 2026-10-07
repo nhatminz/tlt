@@ -17,4 +17,8 @@ cmd+=("$@")
 printf 'Command:';printf ' %q' "${cmd[@]}";printf '\n'
 if [[ "${DRY_RUN:-false}" == true ]];then "${cmd[@]}" --validate-config;exit 0;fi
 prepare_runtime_draft
+if [[ "$METHOD" == tlt_opd_reflex ]];then
+  export OPD_EAGLE3_PARITY_REPORT="${OPD_EAGLE3_PARITY_REPORT:-$ROOT/outputs/validation/eagle3_${MODEL_KEY}.json}"
+  bash "$ROOT/scripts/validate_tlt_eagle3_parity.sh"
+fi
 "${cmd[@]}"

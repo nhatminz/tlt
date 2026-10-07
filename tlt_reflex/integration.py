@@ -51,6 +51,8 @@ def make_reflex(worker,embed):
     path=Path(args.speculative_draft_model_path)
     rank=int(os.environ.get('OPD_RANK',getattr(cfg,'opd_rank',8)));topk=int(os.environ.get('OPD_TOPK','16'))
     projector,provenance=load_projector(path,int(cfg.hidden_size),rank)
+    from tlt_reflex.checkpoint import require_projector_provenance
+    require_projector_provenance(provenance,allow_untrained=os.environ.get('OPD_ALLOW_UNTRAINED_PROJECTOR','0')=='1')
     profile,profile_path=discover(v,rank,model.lm_head.weight.dtype,min(v,topk),embed.device)
     mode=os.environ.get('OPD_PROPOSAL_MODE','auto')
     dense=os.environ.get('OPD_DENSE_IMPLEMENTATION','auto')
@@ -58,11 +60,19 @@ def make_reflex(worker,embed):
     state=OPDState(worker.req_to_token_pool.size,model.lm_head,mapping,projector=projector,
         rank=rank,topk=topk,fast_lr=float(os.environ.get('OPD_FAST_LR','.01')),
         max_contexts=contexts,max_topk=max_topk,max_nodes=max_nodes,max_path=max_path,
+        max_speculative_batch_size=int(os.environ.get('OPD_MAX_SPECULATIVE_BATCH_SIZE',
+            args.apdative_speculative_batch_size_threshold or args.max_running_requests or worker.req_to_token_pool.size)),
+        debug=os.environ.get('OPD_DEBUG','0')=='1',
         visited_weight=float(os.environ.get('OPD_VISITED_WEIGHT','1')),
         frontier_weight=float(os.environ.get('OPD_FRONTIER_WEIGHT','1')),
         update_stream=os.environ.get('OPD_UPDATE_STREAM','1')=='1',meter=worker._tlt_meter,
         proposal_mode=mode,profile=profile,projector_provenance=provenance)
+    print(f'OPD persistent memory MB={state.persistent_memory_mb:.3f}; scratch MB={state.scratch_memory_mb:.3f}; feedback batch capacity={state.max_speculative_batch_size}',flush=True)
     processor.expose_opd_head_input=True
+    capture=os.environ.get('OPD_EAGLE3_PARITY_CAPTURE','')
+    if capture:
+        from tlt_reflex.parity import install_native_recorder
+        install_native_recorder(model,state,capture)
     worker.req_to_token_pool._tlt_reflex=state
     print(f'TLT OPD: rank={rank} TopK={state.topk} contexts={contexts} A={provenance}/frozen; profile={profile_path or "uncalibrated fallback"}',flush=True)
     return state

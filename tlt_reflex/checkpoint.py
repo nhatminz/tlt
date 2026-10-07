@@ -40,7 +40,7 @@ def validate_config(draft,target):
     return cfg
 
 
-def export(checkpoint,config,mapping,target,output):
+def export(checkpoint,config,mapping,target,output,*,projector_provenance=None):
     import torch
     from safetensors.torch import load_file,save_file
     checkpoint=Path(checkpoint).resolve(); config=Path(config).resolve()
@@ -123,18 +123,25 @@ def export(checkpoint,config,mapping,target,output):
     saved_rank=int(projectors[0].shape[1]) if projectors and projectors[0].ndim==2 else None
     rank=int(metadata.get('opd_rank',dc.get('opd_rank',saved_rank or 8)))
     if not 1<=rank<=min(64,h):raise ValueError('invalid OPD projector rank')
-    projector=projectors[0].float().contiguous() if projectors else initialize_projector(h,rank,head=cleaned['lm_head.weight'])
+    projector=projectors[0].detach().float().contiguous() if projectors else initialize_projector(h,rank,head=cleaned['lm_head.weight'])
     if projector.shape!=(h,rank) or not torch.isfinite(projector).all():raise ValueError('incompatible/nonfinite OPD projector')
     if projectors:
         trained=bool(metadata.get('opd_projector_trained',dc.get('opd_projector_trained',False)))
-        provenance=metadata.get('opd_projector_provenance',dc.get('opd_projector_provenance'))
+        provenance=projector_provenance or metadata.get('opd_projector_provenance',dc.get('opd_projector_provenance'))
         if provenance is None:
             # Compare against the deterministic initialization; a saved tensor
             # alone is not evidence that its optimizer ever ran.
             basis=initialize_projector(h,rank,head=cleaned['lm_head.weight'])
-            provenance='trained' if trained else ('head_basis_initialized' if torch.equal(projector,basis) else 'checkpoint_training_unverified')
+            if trained:provenance='trained'
+            elif torch.equal(projector,basis):provenance='head_basis_initialized'
+            else:raise ValueError('checkpoint A was preserved but training provenance is unverified; supply trained metadata or --projector-provenance trained only with training evidence')
+        if provenance not in ('trained','head_basis_initialized'):raise ValueError('invalid/unverified projector provenance; re-export with training evidence')
+        if provenance=='head_basis_initialized' and trained:
+            raise ValueError('head_basis_initialized metadata conflicts with a trained flag')
         if provenance=='trained':trained=True
-    else:trained=False;provenance='head_basis_initialized'
+    else:
+        if projector_provenance=='trained':raise ValueError('cannot mark a missing projector as trained')
+        trained=False;provenance='head_basis_initialized'
     cfg.update(opd_rank=rank,opd_projector_provenance=provenance,opd_projector_trained=trained)
     # Original SGLang loader accepts model.* midlayer/fc/norm plus lm_head.
     converted={('model.'+name if name not in ('lm_head.weight','d2t','t2d') else name):value.contiguous()
@@ -178,4 +185,16 @@ def load_projector(path,hidden,rank):
     projector=torch.load(projector_file,map_location='cpu',weights_only=True)
     if projector.shape!=(hidden,rank) or projector.dtype!=torch.float32 or not torch.isfinite(projector).all():
         raise ValueError('invalid frozen persistent OPD projector')
-    return projector,cfg.get('opd_projector_provenance','checkpoint_training_unverified')
+    provenance=cfg.get('opd_projector_provenance')
+    if provenance not in ('trained','head_basis_initialized'):raise ValueError('unverified projector provenance; re-export to a new DRAFT_EXPORT with training evidence')
+    if bool(cfg.get('opd_projector_trained',False))!=(provenance=='trained'):raise ValueError('projector trained flag/provenance disagree')
+    return projector,provenance
+
+
+def require_projector_provenance(provenance,*,allow_untrained=False):
+    import warnings
+    if provenance=='trained':return
+    if provenance!='head_basis_initialized':raise ValueError('projector provenance must be trained or head_basis_initialized')
+    message='OPD A is head_basis_initialized, NOT trained; official comparisons should use a trained SpecNaacl projector'
+    if not allow_untrained:raise ValueError(message+'; explicit opt-in: OPD_ALLOW_UNTRAINED_PROJECTOR=1')
+    warnings.warn(message+'; untrained projector explicitly allowed',RuntimeWarning)

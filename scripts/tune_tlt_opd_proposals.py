@@ -20,7 +20,7 @@ def benchmark_configuration(key,shapes,slots,iterations):
         head=torch.nn.Linear(r,v,bias=False,device='cuda',dtype=dtype)
         s=OPDState(b,head,torch.arange(v,device='cuda'),rank=r,topk=k,projector=torch.eye(r,device='cuda'),
             max_contexts=c,max_topk=c,max_nodes=1,max_path=1,proposal_mode='sparse',update_stream=False)
-        s.score_workspace=torch.empty(n*v,device='cuda');raw=torch.randn(b,c,v,device='cuda',dtype=dtype)
+        s.score_workspace=torch.empty(n*v,device='cuda');s.has_gemm=True;raw=torch.randn(b,c,v,device='cuda',dtype=dtype)
         u=torch.randn(b,c,r,device='cuda');trials=[]
         for count in slots:
             s.B_fast.zero_();s.bitmap.zero_();s.active_count.fill_(count)
@@ -52,7 +52,7 @@ def benchmark_configuration(key,shapes,slots,iterations):
         records.append(dict(contexts=n,shape=f'{b}x{c}',trials=trials))
     return dict(schema_version=2,execution_key=key,records=records,
         benchmark_metadata=dict(iterations=iterations,statistic='median',unit='ms',cuda_graph=True),
-        note='TLT graph proposal-only costs. Auto uses sparse/fused; GEMM is explicit.')
+        note='TLT graph proposal-only costs. Auto interpolates calibrated sparse/fused/GEMM costs on device.')
 
 
 def main(argv=None):

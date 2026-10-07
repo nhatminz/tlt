@@ -72,6 +72,12 @@ def main(argv=None):
     if a.validate_config:
         print(json.dumps(vars(a),indent=2));return
     if Path(a.output).exists():raise FileExistsError('use a NEW benchmark output')
+    if os.environ.get('OPD_EAGLE3_PARITY_CAPTURE'):
+        raise ValueError('offline parity recorder must never run in a throughput benchmark')
+    parity=None
+    if a.method=='tlt_opd_reflex':
+        from tlt_reflex.parity import require_parity_report
+        parity=require_parity_report(os.environ.get('OPD_EAGLE3_PARITY_REPORT',''),a.model,a.draft)
     configure(a.method,pristine=a.pristine_upstream)
     os.environ['TLT_TRACE']='1'
     os.environ['OPD_PROFILE']='1' if a.profile else '0'
@@ -97,6 +103,10 @@ def main(argv=None):
         context_length=a.max_prompt_length+a.max_new_tokens+a.steps+1,
         attention_backend=a.attention_backend,mem_fraction_static=a.memory_fraction,
         disable_cuda_graph=a.disable_cuda_graph)
+    from tlt_reflex.parity import artifact_identity
+    artifacts=artifact_identity(a.model,a.draft)
+    import hashlib
+    prompt_hash=hashlib.sha256(json.dumps(prompts,separators=(',',':')).encode()).hexdigest()
     engine=sg.Engine(**engine_args)
     sampling=dict(n=a.responses,temperature=a.temperature,top_p=a.top_p,top_k=a.top_k,
                   max_new_tokens=a.max_new_tokens)
@@ -119,6 +129,9 @@ def main(argv=None):
         accepted=counters.get('accepted_draft_tokens')
         proposed=counters.get('proposed_draft_tokens')
         report=dict(method=a.method,config=vars(a),engine_config=engine_args,
+            experiment='TLT adaptive speculative rollout + fixed EAGLE3'+(' + OPD' if a.method=='tlt_opd_reflex' else ''),
+            spot_trainer_enabled=False,real_eagle3_parity=parity,artifact_identity=artifacts,
+            prompt_token_sha256=prompt_hash,measured_prompts=len(prompts),
             generated_tokens=generated,generated_responses=len(collected),generation_wall_s=elapsed,
             tokens_per_s=generated/max(elapsed,1e-9),verification_rounds=rounds,
             # Official FastRL bench definition includes prefill/normal-decode tokens.
@@ -155,11 +168,18 @@ def main(argv=None):
             opd_fused_rounds=counters.get('opd_fused_rounds',0),opd_gemm_rounds=counters.get('opd_gemm_rounds',0),
             opd_feature_time_ms=times.get('opd_feature_ms') if a.profile else None,
             opd_root_head_time_ms=times.get('opd_root_head_ms') if a.profile else None,
+            opd_orphan_nodes=final_metrics.get('counters',{}).get('opd_orphan_nodes',0),opd_invalid_contexts=final_metrics.get('counters',{}).get('opd_invalid_contexts',0),
+            opd_root_head_rows=counters.get('opd_root_head_rows',0),opd_root_reused_states=counters.get('opd_root_reused_states',0),
+            opd_persistent_memory_mb=final_metrics.get('opd_metadata',{}).get('opd_persistent_memory_mb'),
+            opd_scratch_memory_mb=final_metrics.get('opd_metadata',{}).get('opd_scratch_memory_mb'),
             opd_proposal_time_ms=times.get('opd_proposal_ms') if a.profile else None,
             opd_teacher_extraction_time_ms=times.get('opd_teacher_extract_ms') if a.profile else None,
             opd_union_time_ms=times.get('opd_union_loss_ms') if a.profile else None,
             opd_wait_time_ms=times.get('opd_wait_ms') if a.profile else None,
             opd_projector_metadata=final_metrics.get('opd_metadata',{}))
+        if report['opd_orphan_nodes'] or report['opd_invalid_contexts']:
+            report['valid_for_official_comparison']=False
+        else:report['valid_for_official_comparison']=True
         if report['opd_nonfinite_kl_states']:report['opd_kl']=None
         path=Path(a.output);path.parent.mkdir(parents=True,exist_ok=True)
         path.write_text(json.dumps(report,indent=2)+'\n')

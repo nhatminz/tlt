@@ -96,7 +96,7 @@ def test_head_basis_initialized_is_labelled_not_learned(tmp_path):
 def test_projector_sidecar_preserved_and_conflicting_copies_rejected(tmp_path):
     ck,cfg,mapping,target,weights=prepare(tmp_path)
     a=torch.randn(8,8);torch.save(a,ck.parent/'opd_projector.pt')
-    out=export(ck,cfg,mapping,target,tmp_path/'sidecar')
+    out=export(ck,cfg,mapping,target,tmp_path/'sidecar',projector_provenance='trained')
     assert torch.equal(torch.load(out/'opd_projector.pt',weights_only=True),a)
     weights['opd_projector']=a+1;torch.save(dict(draft_state_dict=weights),ck)
     with pytest.raises(ValueError,match='disagree'):export(ck,cfg,mapping,target,tmp_path/'bad')

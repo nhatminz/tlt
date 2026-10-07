@@ -52,6 +52,7 @@ OPD_DENSE_IMPLEMENTATION="${OPD_DENSE_IMPLEMENTATION:-auto}"
 OPD_PROPOSAL_PROFILE_DIR="${OPD_PROPOSAL_PROFILE_DIR:-$SOURCE_SPECNAACL_ROOT/outputs/benchmarks/opd_proposals}"
 export CUDA_VISIBLE_DEVICES METHOD TLT_REFLEX_METHOD="$METHOD"
 export OPD_RANK OPD_TOPK OPD_FAST_LR OPD_VISITED_WEIGHT OPD_FRONTIER_WEIGHT
+export OPD_ALLOW_UNTRAINED_PROJECTOR="${OPD_ALLOW_UNTRAINED_PROJECTOR:-0}"
 export OPD_UPDATE_STREAM OPD_PROFILE OPD_TRAIN_PROJECTOR OPD_PROPOSAL_MODE OPD_DENSE_IMPLEMENTATION OPD_PROPOSAL_PROFILE_DIR
 export PYTHONPATH="$PROJECT_DIR:$PROJECT_DIR/upstream/fastrl/third-party/sglang/python:$PROJECT_DIR/upstream/fastrl${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
@@ -63,6 +64,7 @@ prepare_runtime_draft() {
     [[ -f "$path" ]] || { echo "ERROR: missing required configured path: $path" >&2; exit 2; }
   done
   [[ -e "$DRAFT_CHECKPOINT" ]] || { echo "ERROR: missing pretrained draft: $DRAFT_CHECKPOINT" >&2; exit 2; }
-  "$PYTHON_BIN" "$PROJECT_DIR/scripts/export_specforge_draft.py" --checkpoint "$DRAFT_CHECKPOINT" \
-    --config "$DRAFT_CONFIG" --mapping "$VOCAB_MAPPING" --target "$MODEL" --output "$DRAFT_EXPORT"
+  export_args=(--checkpoint "$DRAFT_CHECKPOINT" --config "$DRAFT_CONFIG" --mapping "$VOCAB_MAPPING" --target "$MODEL" --output "$DRAFT_EXPORT")
+  if [[ -n "${OPD_PROJECTOR_PROVENANCE:-}" ]];then export_args+=(--projector-provenance "$OPD_PROJECTOR_PROVENANCE");fi
+  "$PYTHON_BIN" "$PROJECT_DIR/scripts/export_specforge_draft.py" "${export_args[@]}"
 }

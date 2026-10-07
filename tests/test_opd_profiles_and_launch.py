@@ -62,7 +62,11 @@ def test_summary_recommends_only_paired_aal_and_throughput_wins(tmp_path):
     spec=importlib.util.spec_from_file_location('summary',ROOT/'scripts/summarize_tlt_opd.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     for name,method,aal,tps in [('baseline','tlt',2.,100.),('slow','tlt_opd_reflex',2.5,99.),('fast','tlt_opd_reflex',2.3,102.)]:
         folder=tmp_path/name;folder.mkdir()
-        report=dict(method=method,config=dict(batch_size=1,seed=42),verified_aal=aal,tokens_per_s=tps,opd_fast_lr=.01,opd_update_stream=1)
+        cfg={key:1 for key in module.REQUIRED_CONFIG};cfg.update(batch_size=1,seed=42,profile=False)
+        report=dict(method=method,config=cfg,verified_aal=aal,tokens_per_s=tps,opd_fast_lr=.01,opd_update_stream=1,
+            engine_config={},artifact_identity={'same':'weights'},prompt_token_sha256='same',measured_prompts=1,generated_responses=1,
+            spot_trainer_enabled=False,valid_for_official_comparison=True,opd_orphan_nodes=0,opd_invalid_contexts=0,
+            real_eagle3_parity=dict(passed=True),generation_wall_s=100/tps)
         (folder/'report.json').write_text(json.dumps(report));(folder/'responses.jsonl').write_text('{}\n')
     rows=module.summarize(tmp_path)
     assert [r['recommendable'] for r in rows]==[False,True,False]

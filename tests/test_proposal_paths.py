@@ -46,7 +46,7 @@ def test_actual_verifier_teacher_accept_path_rng_reused_before_finish(greedy):
     for folder,active in [(PRISTINE,None),(PATCHED,plugin)]:
         path=folder/'speculative/eagle_info.py';tree=ast.parse(path.read_text());cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='EagleVerifyInput')
         fn=copy.deepcopy(next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='verify'))
-        cut=next(i for i,n in enumerate(fn.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='unfinished_index' for t in n.targets))
+        cut=next(i for i,n in enumerate(fn.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='accept_index' and isinstance(n.value,ast.Subscript) for t in n.targets))
         fn.body=fn.body[:cut]+[ast.parse('return predict.clone(), accept_index.clone()').body[0]]
         calls=[]
         def sampler(**kwargs):
@@ -60,7 +60,11 @@ def test_actual_verifier_teacher_accept_path_rng_reused_before_finish(greedy):
             def __len__(self):return 2
         sampling=Sampling(is_all_greedy=greedy,has_custom_logit_processor=False,penalizer_orchestrator=NS(is_required=False),
             temperatures=torch.ones(2,1,device='cuda'),top_ks=torch.full((2,),74,device='cuda'),top_ps=torch.ones(2,device='cuda'))
-        batch=NS(forward_mode=NS(is_idle=lambda:False),sampling_info=sampling,req_to_token_pool=NS(_tlt_reflex=active),req_pool_indices=slots)
+        class Req:
+            def __init__(self):self.output_ids=[];self.grammar=None;self.spec_verify_ct=0;self.spec_accepted_tokens=0
+            def check_finished(self):pass
+            def finished(self):return False
+        batch=NS(forward_mode=NS(is_idle=lambda:False),sampling_info=sampling,req_to_token_pool=NS(_tlt_reflex=active),req_pool_indices=slots,reqs=[Req(),Req()])
         obj=NS(retrive_index=torch.arange(8,device='cuda').view(2,4),draft_token=torch.zeros(8,device='cuda',dtype=torch.long),draft_token_num=4,spec_steps=3,
             retrive_next_token=None,retrive_next_sibling=None,opd_parents=None,opd_feedback_contexts=None)
         torch.cuda.manual_seed(91);results.append(ns['verify'](obj,batch,NS(next_token_logits=raw),None,1));rngs.append(torch.cuda.get_rng_state())

@@ -6,6 +6,9 @@ PAIR_DIR="${PAIR_DIR:-$ROOT/outputs/benchmarks/paired_$(date -u +%Y%m%dT%H%M%S_%
 for mode in tlt tlt_opd_reflex; do
   METHOD="$mode" OUTPUT_DIR="$PAIR_DIR/$mode" OPD_PROFILE=0 bash "$ROOT/run_benchmark.sh" "$@"
 done
+if [[ "${DRY_RUN:-false}" != true ]];then
+  "${PYTHON_BIN:-python3}" "$ROOT/scripts/summarize_tlt_opd.py" "$PAIR_DIR"
+fi
 if [[ "${COMPONENT_PROFILE:-0}" == 1 ]];then
   for mode in tlt tlt_opd_reflex; do
     METHOD="$mode" OUTPUT_DIR="$PAIR_DIR/${mode}_components_eager" DISABLE_CUDA_GRAPH=1 OPD_PROFILE=1 \

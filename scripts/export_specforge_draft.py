@@ -9,8 +9,9 @@ from tlt_reflex.checkpoint import export
 def main():
     p=argparse.ArgumentParser(description='Export existing SpecNaacl pretrained EAGLE3; no training or random fallback')
     for arg in ('checkpoint','config','mapping','target','output'): p.add_argument('--'+arg,required=True)
+    p.add_argument('--projector-provenance',choices=['trained','head_basis_initialized'])
     a=p.parse_args()
-    print(export(a.checkpoint,a.config,a.mapping,a.target,a.output))
+    print(export(a.checkpoint,a.config,a.mapping,a.target,a.output,projector_provenance=a.projector_provenance))
 
 
 if __name__=='__main__': main()

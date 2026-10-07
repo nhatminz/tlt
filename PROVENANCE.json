@@ -22,11 +22,11 @@
       "third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py": "9c5ecfc1b6da5e6db380c9961bdcf27ae31ff92d9a086ae32904c7f0c02ee3fb",
       "third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py": "56e9f8da87e566b65346d0e4d3544805fb9fff31fb151c7ca56b55b99c848cc1",
       "third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py": "731fd0a725142b29a2e9c8277a71c9c3518ee130cfacd2ea315bc9d882010f83",
-      "third-party/sglang/python/sglang/srt/speculative/eagle_info.py": "ff9cef3a532297e39c7d7b1fb8b32f99b4ff581eb1669924e57b03c14fda54ff",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_info.py": "55281b0e9404590962c3f5ce0059edde5aefc47672fee5221738524bc0525a34",
       "third-party/sglang/python/sglang/srt/speculative/eagle_worker.py": "e09629fbd029c4b706b4736e04cf63c3bc4add417e4ba44474da71e15a1ae067",
       "verl/trainer/constants_ppo.py": "2d5860a88571d6c8014a5dc0454bed36321109dffefca61377a4103c50929081"
     },
-    "reflex_patch_sha256": "95482a06438ab3102c7f590d55bbc500aa6bac2d8a53a04676ac455f0ec2ab2a"
+    "reflex_patch_sha256": "65be9fe35ecedadf0685cde9f52d2cf0445b30d41903a5212512e61d3c50d5d1"
   },
   "flashinfer": {
     "version": "0.4.0",
