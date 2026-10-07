@@ -9,7 +9,7 @@ from tlt_reflex.runtime import configure,require_runtime
 
 def parse_args(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--method',choices=['tlt','tlt_reflex'],default=os.environ.get('METHOD','tlt'))
+    p.add_argument('--method',choices=['tlt','tlt_opd_reflex'],default=os.environ.get('METHOD','tlt'))
     for key in ('model','draft','dataset','output'):p.add_argument('--'+key,required=True)
     p.add_argument('--batch-size',type=int,default=8)
     p.add_argument('--responses',type=int,default=8)
@@ -74,7 +74,7 @@ def main(argv=None):
     if Path(a.output).exists():raise FileExistsError('use a NEW benchmark output')
     configure(a.method,pristine=a.pristine_upstream)
     os.environ['TLT_TRACE']='1'
-    os.environ['REFLEX_PROFILE']='1' if a.profile else '0'
+    os.environ['OPD_PROFILE']='1' if a.profile else '0'
     sg=require_runtime()
     import torch
     from transformers import AutoTokenizer
@@ -129,17 +129,47 @@ def main(argv=None):
             proposal_time_ms=times.get('proposal_ms') if a.profile else None,
             draft_extend_time_ms=times.get('draft_extend_ms',0.) if a.profile else None,
             proposal_latency_total_ms=sum(times.get(k,0.) for k in ('proposal_ms','draft_extend_ms')) if a.profile else None,
-            proposal_correction_time_ms=times.get('reflex_correction_ms',0.) if a.profile else None,
+            proposal_correction_time_ms=times.get('opd_proposal_ms',0.) if a.profile else None,
             verification_time_ms=times.get('verification_ms') if a.profile else None,
-            reflex_update_time_ms=times.get('reflex_update_ms',0.) if a.profile else None,
-            reflex_overhead_ms=sum(times.get(k,0.) for k in ('reflex_feature_ms','reflex_correction_ms','reflex_cache_ms','reflex_update_ms')) if a.profile else None,
+            opd_update_time_ms=times.get('opd_update_ms',0.) if a.profile else None,
+            total_opd_overhead_ms=sum(v for k,v in times.items() if k.startswith('opd_') and k!='opd_wait_ms') if a.profile else None,
             phase_times_ms=times,server_info=final,
             reflex_state_memory_mb=final_metrics.get('reflex_state_memory_mb'),
             reflex_buffer_memory_mb=final_metrics.get('reflex_buffer_memory_mb'),
             note='Throughput pass is unprofiled. Eager component pass is separate; MAB timing-driven strategy/trajectories may differ. No added target forward/sampling. Overlapping intervals cannot infer net wall overhead.')
+        rounds_opd=counters.get('opd_rounds',0);states=counters.get('opd_selected_states',0)
+        weight=counters.get('opd_state_weight',0)
+        memory=final_metrics.get('gpu_memory',{})
+        report.update(opd_fast_lr=float(os.environ.get('OPD_FAST_LR','.01')),
+            opd_update_stream=int(os.environ.get('OPD_UPDATE_STREAM','1')),
+            peak_allocated_gb=memory.get('peak_allocated_gb'),peak_reserved_gb=memory.get('peak_reserved_gb'),
+            opd_selected_states=states,opd_visited_states=counters.get('opd_visited_states',0),
+            opd_frontier_states=counters.get('opd_frontier_states',0),opd_invalid_states=counters.get('opd_invalid_states',0),
+            opd_kl=counters.get('opd_kl_sum',0)/weight if weight else None,
+            opd_nonfinite_kl_states=counters.get('opd_nonfinite_kl_states',0),
+            opd_compact_mass=counters.get('opd_compact_mass_sum',0)/states if states else None,
+            opd_target_mass_in_draft_top16=counters.get('opd_draft_topk_target_mass_sum',0)/states if states else None,
+            opd_active_rows_mean=counters.get('opd_active_rows_sum',0)/rounds_opd if rounds_opd else None,
+            opd_active_rows_max=final_metrics.get('counters',{}).get('opd_active_rows_max'),
+            opd_sparse_rounds=counters.get('opd_sparse_rounds',0),opd_dense_rounds=counters.get('opd_dense_rounds',0),
+            opd_fused_rounds=counters.get('opd_fused_rounds',0),opd_gemm_rounds=counters.get('opd_gemm_rounds',0),
+            opd_feature_time_ms=times.get('opd_feature_ms') if a.profile else None,
+            opd_root_head_time_ms=times.get('opd_root_head_ms') if a.profile else None,
+            opd_proposal_time_ms=times.get('opd_proposal_ms') if a.profile else None,
+            opd_teacher_extraction_time_ms=times.get('opd_teacher_extract_ms') if a.profile else None,
+            opd_union_time_ms=times.get('opd_union_loss_ms') if a.profile else None,
+            opd_wait_time_ms=times.get('opd_wait_ms') if a.profile else None,
+            opd_projector_metadata=final_metrics.get('opd_metadata',{}))
+        if report['opd_nonfinite_kl_states']:report['opd_kl']=None
         path=Path(a.output);path.parent.mkdir(parents=True,exist_ok=True)
         path.write_text(json.dumps(report,indent=2)+'\n')
-        path.with_suffix('.responses.jsonl').write_text(''.join(json.dumps(o)+'\n' for o in collected))
+        (path.parent/'responses.jsonl').write_text(''.join(json.dumps(o)+'\n' for o in collected))
+        # Single-run summary keeps the complete metric schema; paired recommendation
+        # is written by the sweep aggregator.
+        import csv
+        flat={k:v for k,v in report.items() if isinstance(v,(str,int,float,bool)) or v is None}
+        with (path.parent/'summary.csv').open('w',newline='') as f:
+            writer=csv.DictWriter(f,fieldnames=list(flat));writer.writeheader();writer.writerow(flat)
         print(json.dumps({k:v for k,v in report.items() if k not in ('server_info','engine_config')},indent=2))
     finally:
         engine.shutdown()

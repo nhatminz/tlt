@@ -12,7 +12,7 @@ cmd=("$PYTHON_BIN" "$ROOT/benchmark.py" --method "$METHOD" --model "$MODEL" --dr
   --sd-threshold "$SD_THRESHOLD" --mab "$MAB_ALGORITHM" --mab-configs "$MAB_CONFIGS" --mab-buckets "$MAB_BUCKETS"
   --attention-backend "$ATTENTION_BACKEND" --memory-fraction "${MEM_FRACTION:-0.6}")
 if [[ "${DISABLE_CUDA_GRAPH:-0}" == 1 ]]; then cmd+=(--disable-cuda-graph);fi
-if [[ "$REFLEX_PROFILE" == 1 ]]; then cmd+=(--profile);fi
+if [[ "$OPD_PROFILE" == 1 ]]; then cmd+=(--profile);fi
 cmd+=("$@")
 printf 'Command:';printf ' %q' "${cmd[@]}";printf '\n'
 if [[ "${DRY_RUN:-false}" == true ]];then "${cmd[@]}" --validate-config;exit 0;fi

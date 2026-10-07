@@ -4,13 +4,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMMIT=bce3df7a4d46473912e9b81bf47bca419729557f
 UPSTREAM_ROOT="${UPSTREAM_ROOT:-$ROOT/upstream}"
-SOURCE="${FASTRL_GIT_SOURCE:-https://github.com/mit-han-lab/fastrl}"
+DEFAULT_SOURCE=https://github.com/mit-han-lab/fastrl
+if [[ -f "$ROOT/artifacts/fastrl-bce3df7.bundle" ]];then DEFAULT_SOURCE="$ROOT/artifacts/fastrl-bce3df7.bundle";fi
+SOURCE="${FASTRL_GIT_SOURCE:-$DEFAULT_SOURCE}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 PATCH="$ROOT/patches/fastrl_reflex.patch"
 [[ -f "$PATCH" ]] || { echo 'ERROR: tracked patches/fastrl_reflex.patch missing' >&2; exit 2; }
 command -v git >/dev/null || { echo 'ERROR: git is required for bootstrap' >&2; exit 2; }
 export GIT_TERMINAL_PROMPT=0
 mkdir -p "$UPSTREAM_ROOT"
+# A zip/previous checkout may have no nested Git metadata. Migrate only the
+# exact recognized legacy source. Preserve it as a reversible backup.
+if [[ -d "$UPSTREAM_ROOT/fastrl" ]];then
+  if [[ ! -d "$UPSTREAM_ROOT/fastrl/.git" ]] || ! git -C "$UPSTREAM_ROOT/fastrl" apply --reverse --check "$PATCH" >/dev/null 2>&1;then
+    if "$PYTHON_BIN" "$ROOT/scripts/upgrade_upstream.py" "$UPSTREAM_ROOT/fastrl";then
+      backup="$UPSTREAM_ROOT/../upstream.legacy.fast_lk.$(date -u +%Y%m%dT%H%M%S_%N)"
+      mv "$UPSTREAM_ROOT/fastrl" "$backup"
+      echo "Recognized previous Fast-LK upstream saved at $backup"
+    fi
+  fi
+fi
 if [[ ! -e "$UPSTREAM_ROOT/fastrl" ]];then
   stage="$(mktemp -d "$UPSTREAM_ROOT/.fastrl-bootstrap.XXXXXX")"
   echo "Cloning official FastRL (or explicit offline git bundle): $SOURCE"
@@ -23,9 +36,14 @@ if [[ ! -e "$UPSTREAM_ROOT/fastrl" ]];then
   git -C "$stage/fastrl" apply --check "$PATCH"
   git -C "$stage/fastrl" apply "$PATCH"
   git -C "$stage/fastrl" apply --reverse --check "$PATCH"
-  [[ ! -e "$UPSTREAM_ROOT/pristine_sglang_python" ]] || { echo 'ERROR: orphan pristine copy exists; move it aside explicitly before bootstrapping' >&2; exit 2; }
+  if [[ -e "$UPSTREAM_ROOT/pristine_sglang_python" ]];then
+    diff -qr --exclude=__pycache__ "$stage/pristine_sglang_python" "$UPSTREAM_ROOT/pristine_sglang_python" >/dev/null || {
+      echo 'ERROR: pristine source differs from verified pin; existing source was preserved' >&2;exit 2;
+    }
+  else
+    mv "$stage/pristine_sglang_python" "$UPSTREAM_ROOT/pristine_sglang_python"
+  fi
   mv "$stage/fastrl" "$UPSTREAM_ROOT/fastrl"
-  mv "$stage/pristine_sglang_python" "$UPSTREAM_ROOT/pristine_sglang_python"
 else
   [[ -d "$UPSTREAM_ROOT/fastrl/.git" ]] || {
     echo 'ERROR: existing fastrl has no git identity. Move legacy upstream aside, then bootstrap; nothing was overwritten.' >&2; exit 2;

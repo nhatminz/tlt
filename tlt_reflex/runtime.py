@@ -11,8 +11,8 @@ PRISTINE=ROOT/'upstream/pristine_sglang_python'
 
 def configure(mode, *, pristine=False):
     global SGLANG
-    if mode not in ('tlt','tlt_reflex'):
-        raise ValueError('METHOD must be tlt or tlt_reflex')
+    if mode not in ('tlt','tlt_opd_reflex'):
+        raise ValueError('METHOD must be tlt or tlt_opd_reflex')
     if pristine and mode!='tlt':
         raise ValueError('pristine upstream supports METHOD=tlt only')
     SGLANG=PRISTINE if pristine else FAStrl/'third-party/sglang/python'

@@ -20,7 +20,7 @@ def main():
         raise ValueError('engine configs differ; not a valid equivalence check')
     sequences=[]
     for x in (a.pristine,a.off):
-        rows=[json.loads(s) for s in Path(x).with_suffix('.responses.jsonl').read_text().splitlines()]
+        rows=[json.loads(s) for s in (Path(x).parent/'responses.jsonl').read_text().splitlines()]
         sequences.append([r.get('output_ids',r.get('text')) for r in rows])
     identical=sequences[0]==sequences[1]
     print(json.dumps(dict(response_outputs_identical=identical,responses=[len(x) for x in sequences]),indent=2))

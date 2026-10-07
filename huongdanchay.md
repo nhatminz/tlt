@@ -1,4 +1,17 @@
+# Cập nhật Reflex OPD (2026-10-07)
+
+Hướng dẫn hiện tại: [RUN_TLT_OPD.md](RUN_TLT_OPD.md). Hai mode mới là `tlt` và
+`tlt_opd_reflex`; dùng profile trong folder SpecNaacl, rank8/Top16/LR0.01/stream1.
+Phần bên dưới được giữ làm lịch sử setup; các lệnh `tlt_reflex`/`REFLEX_*` cũ không
+còn hợp lệ sau OPD migration. Dependency/offline-wheel setup không thay đổi.
+
+---
+
 # Lệnh chạy TltReflex trên server
+
+Nếu dùng bộ wheel offline đã tạo ngày2026-10-06, làm theo
+[OFFLINE_WHEELS.md](OFFLINE_WHEELS.md) và chạy
+`INSTALL_RL=1 bash scripts/install_offline_wheels.sh` trong venv mới Python3.12.
 
 ## 1. Cài đúng môi trường một lần
 

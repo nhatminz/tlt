@@ -8,3 +8,5 @@ upstream/
 upstream.legacy.*/
 wheels/
 artifacts/
+validation/
+wheelhouse*.zip

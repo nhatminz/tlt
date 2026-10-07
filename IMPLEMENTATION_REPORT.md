@@ -1,3 +1,13 @@
+# Reflex OPD migration (2026-10-07)
+
+Current implementation: [OPD_IMPLEMENTATION.md](OPD_IMPLEMENTATION.md).
+B200 run instructions: [RUN_TLT_OPD.md](RUN_TLT_OPD.md).
+The report below describes the historical Fast-LK port; its production method,
+state layout and old metrics do not apply to current OPD. Environment pins,
+protected upstream algorithms and offline wheel work remain applicable.
+
+---
+
 # Review-fix implementation / validation report
 
 Date: 2026-10-05. This report supersedes the earlier local-artifact-only result.

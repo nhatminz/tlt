@@ -17,7 +17,7 @@ def validate_spot_trainer(cfg):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--method',choices=['tlt','tlt_reflex'],required=True)
+    p.add_argument('--method',choices=['tlt','tlt_opd_reflex'],required=True)
     p.add_argument('--validate-config',action='store_true')
     args,overrides=p.parse_known_args()
     configure(args.method)

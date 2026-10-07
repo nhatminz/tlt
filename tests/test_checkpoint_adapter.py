@@ -67,3 +67,36 @@ def test_corrupted_runtime_export_is_not_reused(tmp_path):
     out=export(ck,cfg,mapping,target,tmp_path/'exported')
     (out/'model.safetensors').write_bytes(b'corrupted')
     with pytest.raises(ValueError,match='checksum'):export(ck,cfg,mapping,target,out)
+
+
+def test_trained_projector_export_load_roundtrip_no_overwrite(tmp_path):
+    from tlt_reflex.checkpoint import load_projector
+    ck,cfg,mapping,target,weights=prepare(tmp_path)
+    projector=torch.randn(8,3);weights['opd_projector']=projector
+    torch.save(dict(draft_state_dict=weights,opd_projector=projector,metadata=dict(opd_rank=3,opd_projector_trained=True)),ck)
+    out=export(ck,cfg,mapping,target,tmp_path/'opd')
+    actual,provenance=load_projector(out,8,3)
+    assert torch.equal(actual,projector) and provenance=='trained'
+    config=json.loads((out/'config.json').read_text());assert config['opd_rank']==3 and config['opd_projector_trained']
+    from safetensors.torch import load_file
+    assert torch.equal(load_file(str(out/'model.safetensors'))['lm_head.weight'],weights['lm_head.weight'])
+    with pytest.raises(ValueError,match='rank'):load_projector(out,8,8)
+
+
+def test_head_basis_initialized_is_labelled_not_learned(tmp_path):
+    from tlt_reflex.checkpoint import load_projector
+    from tlt_reflex.ported.reference import initialize_projector
+    ck,cfg,mapping,target,weights=prepare(tmp_path);out=export(ck,cfg,mapping,target,tmp_path/'basis')
+    a,provenance=load_projector(out,8,8)
+    assert provenance=='head_basis_initialized'
+    assert torch.equal(a,initialize_projector(8,8,head=weights['lm_head.weight']))
+    assert not json.loads((out/'config.json').read_text())['opd_projector_trained']
+
+
+def test_projector_sidecar_preserved_and_conflicting_copies_rejected(tmp_path):
+    ck,cfg,mapping,target,weights=prepare(tmp_path)
+    a=torch.randn(8,8);torch.save(a,ck.parent/'opd_projector.pt')
+    out=export(ck,cfg,mapping,target,tmp_path/'sidecar')
+    assert torch.equal(torch.load(out/'opd_projector.pt',weights_only=True),a)
+    weights['opd_projector']=a+1;torch.save(dict(draft_state_dict=weights),ck)
+    with pytest.raises(ValueError,match='disagree'):export(ck,cfg,mapping,target,tmp_path/'bad')

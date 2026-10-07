@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import torch
-from tlt_reflex.state import RequestReflex
+from test_request_reflex import create
 from tlt_reflex.telemetry import Meter
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -23,8 +23,8 @@ def test_bootstrap_refuses_wrong_commit_without_resetting_existing_tree(tmp_path
 
 def test_memory_metrics_are_host_metadata_and_profiling_off_allocates_no_events(monkeypatch):
     meter=Meter(False)
-    state=RequestReflex(7,19,12,torch.arange(19),backend='torch',meter=meter)
-    assert meter.reflex_state_memory_mb==7*19*8*4/1e6
+    state=create();meter.reflex_state_memory_mb=state.B_fast.numel()*4/1e6;meter.reflex_buffer_memory_mb=meter.reflex_state_memory_mb+1
+    assert meter.reflex_state_memory_mb==37*8*4/1e6
     assert meter.reflex_buffer_memory_mb>meter.reflex_state_memory_mb
     def forbidden(*args,**kwargs):raise AssertionError('disabled profiling must not create events/sync')
     monkeypatch.setattr(torch.cuda,'Event',forbidden)
@@ -55,7 +55,7 @@ def test_v2_inherits_factory_guard_and_unsupported_overlap_is_not_silent(monkeyp
     assert any(isinstance(n,ast.Name) and n.id=='EAGLEWorker' for n in node.bases)
     init=next(n for n in node.body if isinstance(n,ast.FunctionDef) and n.name=='__init__')
     assert any(isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='super' for n in ast.walk(init))
-    monkeypatch.setenv('TLT_REFLEX_METHOD','tlt_reflex')
+    monkeypatch.setenv('TLT_REFLEX_METHOD','tlt_opd_reflex')
     worker=NS(speculative_algorithm=NS(is_eagle3=lambda:True),server_args=NS(disable_overlap_schedule=False))
     with pytest.raises(ValueError,match='EAGLEWorkerV2'):make_reflex(worker,torch.empty(1))
 

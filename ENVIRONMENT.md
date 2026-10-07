@@ -1,5 +1,9 @@
 # Dedicated TLT environment (Linux x86_64 / Python3.12 / B200)
 
+**Bộ offline đã được tạo sẵn:** xem [OFFLINE_WHEELS.md](OFFLINE_WHEELS.md).
+211 wheels (~4.80 GiB), đủ RL; installer mới `scripts/install_offline_wheels.sh`
+không gọi Internet/source-build. Đã cài thử full offline và pip check PASS.
+
 Không dùng venv SpecNaacl. Fork TLT API khác stock SGLang; reinstall stock
 SGLang0.5.18/Torch2.13 vào TLT sẽ không cung cấp adaptive/BEG fork này.
 

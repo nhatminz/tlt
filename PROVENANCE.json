@@ -7,24 +7,26 @@
     "sglang_version": "0.5.3.post2",
     "sglang_source": "included third-party/sglang tree at the same FastRL commit; NOT PyPI SGLang",
     "modified_files": [
-      "third-party/sglang/python/sglang/srt/speculative/eagle_worker.py",
-      "third-party/sglang/python/sglang/srt/speculative/eagle_info.py",
+      "third-party/sglang/python/sglang/srt/layers/logits_processor.py",
+      "third-party/sglang/python/sglang/srt/managers/scheduler.py",
+      "third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py",
       "third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py",
       "third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py",
-      "third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py",
-      "third-party/sglang/python/sglang/srt/managers/scheduler.py",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_info.py",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_worker.py",
       "verl/trainer/constants_ppo.py"
     ],
     "patched_sha256": {
-      "third-party/sglang/python/sglang/srt/speculative/eagle_worker.py": "4cd8cbe66cb6519098817e041de4a559a589d39bd71b19c046c798b6a2047ea6",
-      "third-party/sglang/python/sglang/srt/speculative/eagle_info.py": "4ff263cb68c2f29b196786f48154bb308403f0e20e950af830ce19f6d0a1be95",
-      "third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py": "9bac71cdafad43da8d351d22c297717aced16081d29bba45ac25bb6e8bb79ee3",
-      "third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py": "03c25ecf587559aa7bcaab58997026f4ac0e59b757cb9d7d1b15b92380e70d11",
-      "third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py": "90bef00df0971606a558cbfe84632f38b6f399539d92e805cb4508809bc28c45",
+      "third-party/sglang/python/sglang/srt/layers/logits_processor.py": "1c38bc76053b04d2e5b10787b81ed3dfb32bd35b1b882e1ecf59187569a8fd6e",
       "third-party/sglang/python/sglang/srt/managers/scheduler.py": "5f26850306b222507f2e9d013f9e11af28ef679237e670b38d01a6fe996e9aba",
-      "verl/trainer/constants_ppo.py": "a06a8a6893919ba9c740c2301fa1b76ece67d596c80892211981040377d03d2f"
+      "third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py": "9c5ecfc1b6da5e6db380c9961bdcf27ae31ff92d9a086ae32904c7f0c02ee3fb",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py": "56e9f8da87e566b65346d0e4d3544805fb9fff31fb151c7ca56b55b99c848cc1",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py": "731fd0a725142b29a2e9c8277a71c9c3518ee130cfacd2ea315bc9d882010f83",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_info.py": "ff9cef3a532297e39c7d7b1fb8b32f99b4ff581eb1669924e57b03c14fda54ff",
+      "third-party/sglang/python/sglang/srt/speculative/eagle_worker.py": "e09629fbd029c4b706b4736e04cf63c3bc4add417e4ba44474da71e15a1ae067",
+      "verl/trainer/constants_ppo.py": "2d5860a88571d6c8014a5dc0454bed36321109dffefca61377a4103c50929081"
     },
-    "reflex_patch_sha256": "e7b2899b58ad48a3bf0ebf1cc9e4d33228ca0e543f89648510fb3bb53eaef9d9"
+    "reflex_patch_sha256": "95482a06438ab3102c7f590d55bbc500aa6bac2d8a53a04676ac455f0ec2ab2a"
   },
   "flashinfer": {
     "version": "0.4.0",
@@ -53,6 +55,6 @@
       "csrc/tlt_legacy_tensor.h": "11ec5e71e503061fca6212cc87be25247a706a7d391786392d24a77446927d49"
     }
   },
-  "reflex_source": "SpecNaacl/helper/fast_lk_reflex.py and fast_lk_reflex_kernels.py; analytic root-feedback LK loss gradient, FP32 state; ported to request slots",
+  "reflex_source": "SpecNaacl/helper/opd_reflex.py and opd_reflex_kernels.py; shared rollout-local B, frozen persistent exact-head-input A; TLT scheduler/KV/tree/verifier unchanged",
   "dependency_lock": "requirements.txt: 206 exact pins, CUDA Python/bindings12.8 matching Torch cu128; resolved against upstream metadata with exclude-newer 2026-02-28; full runtime pip check not yet run"
 }

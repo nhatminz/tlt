@@ -1,41 +1,234 @@
+diff --git a/third-party/sglang/python/sglang/srt/layers/logits_processor.py b/third-party/sglang/python/sglang/srt/layers/logits_processor.py
+index e108866..4b0eec4 100644
+--- a/third-party/sglang/python/sglang/srt/layers/logits_processor.py
++++ b/third-party/sglang/python/sglang/srt/layers/logits_processor.py
+@@ -63,6 +63,7 @@ class LogitsProcessorOutput:
+     # Used by speculative decoding (EAGLE)
+     # The last hidden layers
+     hidden_states: Optional[torch.Tensor] = None
++    opd_head_input: Optional[torch.Tensor] = None
+
+     ## Part 2: This part will be assigned in python/sglang/srt/layers/sampler.py::Sampler
+     # he log probs of output tokens, if SGLANG_RETURN_ORIGINAL_LOGPROB = True, will get the log probs before applying temperature. If False, will get the log probs before applying temperature.
+@@ -457,6 +458,12 @@ class LogitsProcessor(nn.Module):
+                 input_logprob_indices, device=pruned_states.device, dtype=torch.int64
+             )
+
++        # Exact head operand, separate from EAGLE3 auxiliary recurrent state.
++        opd_head_input = None
++        if getattr(self, "expose_opd_head_input", False):
++            pruned_states = pruned_states.to(lm_head.weight.dtype)
++            opd_head_input = (pruned_states[sample_indices]
++                if sample_indices is not None else pruned_states)
+         # Compute logits for both input and sampled tokens.
+         logits = self._get_logits(pruned_states, lm_head, logits_metadata)
+         sampled_logits = (
+@@ -503,6 +510,7 @@ class LogitsProcessor(nn.Module):
+             return LogitsProcessorOutput(
+                 next_token_logits=sampled_logits,
+                 hidden_states=hidden_states_to_store,
++                opd_head_input=opd_head_input,
+             )
+         else:
+             input_logprobs = logits[input_logprob_indices]
+@@ -556,6 +564,7 @@ class LogitsProcessor(nn.Module):
+                 input_top_logprobs_val=input_top_logprobs_val,
+                 input_top_logprobs_idx=input_top_logprobs_idx,
+                 hidden_states=hidden_states_to_store,
++                opd_head_input=opd_head_input,
+                 input_token_ids_logprobs_val=input_token_ids_logprobs_val,
+                 input_token_ids_logprobs_idx=input_token_ids_logprobs_idx,
+             )
+diff --git a/third-party/sglang/python/sglang/srt/managers/scheduler.py b/third-party/sglang/python/sglang/srt/managers/scheduler.py
+index 55873c3..d0fa5c9 100644
+--- a/third-party/sglang/python/sglang/srt/managers/scheduler.py
++++ b/third-party/sglang/python/sglang/srt/managers/scheduler.py
+@@ -2756,6 +2756,9 @@ class Scheduler(
+         if RECORD_STEP_TIME:
+             ret["step_time_dict"] = self.step_time_dict
+
++        meter = getattr(getattr(self, "draft_worker", None), "_tlt_meter", None)
++        if meter is not None:
++            ret["tlt_reflex_metrics"] = meter.report()
+         return GetInternalStateReqOutput(internal_state=ret)
+
+     def set_internal_state(self, recv_req: SetInternalStateReq):
+diff --git a/third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py b/third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py
+index c468269..67ecb6e 100644
+--- a/third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py
++++ b/third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py
+@@ -99,9 +99,15 @@ class ReqToTokenPool:
+         select_index = self.free_slots[:need_size]
+         self.free_slots = self.free_slots[need_size:]
+
++        reflex = getattr(self, "_tlt_reflex", None)
++        if reflex is not None:
++            reflex.reset_slots(select_index, allocated=True)
+         return select_index
+
+     def free(self, free_index: Union[int, List[int]]):
++        reflex = getattr(self, "_tlt_reflex", None)
++        if reflex is not None:
++            reflex.reset_slots(free_index, allocated=False)
+         if isinstance(free_index, (int,)):
+             self.free_slots.append(free_index)
+         else:
+@@ -109,6 +115,9 @@ class ReqToTokenPool:
+
+     def clear(self):
+         self.free_slots = list(range(self.size))
++        reflex = getattr(self, "_tlt_reflex", None)
++        if reflex is not None:
++            reflex.clear()
+
+
+ class MambaPool:
+@@ -247,6 +256,9 @@ class MambaPool:
+         select_index = self.free_slots[:need_size]
+         self.free_slots = self.free_slots[need_size:]
+
++        reflex = getattr(self, "_tlt_reflex", None)
++        if reflex is not None:
++            reflex.reset_slots(select_index, allocated=True)
+         return select_index
+
+     def free(self, free_index: torch.Tensor):
+@@ -363,6 +375,9 @@ class HybridReqToTokenPool(ReqToTokenPool):
+         self.req_index_to_mamba_index_mapping[select_index] = torch.tensor(
+             mamba_index, dtype=torch.int32, device=self.device
+         )
++        reflex = getattr(self, "_tlt_reflex", None)
++        if reflex is not None:
++            reflex.reset_slots(select_index, allocated=True)
+         return select_index
+
+     def get_mamba_indices(self, req_indices: torch.Tensor) -> torch.Tensor:
+diff --git a/third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py b/third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
+index 94858f9..576f1bd 100644
+--- a/third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
++++ b/third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
+@@ -84,6 +84,8 @@ class EAGLEDraftCudaGraphRunner:
+         with torch.device("cuda"):
+             self.input_ids = torch.zeros((self.max_num_token,), dtype=torch.int64)
+             self.req_pool_indices = torch.zeros((self.max_bs,), dtype=torch.int32)
++            self._tlt_valid_bs = (torch.zeros((), dtype=torch.int32)
++                if self.eagle_worker._tlt_reflex is not None else None)
+             self.seq_lens = torch.full(
+                 (self.max_bs,), self.seq_len_fill_value, dtype=torch.int32
+             )
+@@ -240,6 +242,7 @@ class EAGLEDraftCudaGraphRunner:
+             global_num_tokens_for_logprob_gpu=global_num_tokens_for_logprob,
+         )
+
++        forward_batch._tlt_valid_bs = self._tlt_valid_bs
+         # Attention backend
+         self.model_runner.draft_attn_backend.init_forward_metadata_capture_cuda_graph(
+             forward_batch
+@@ -283,6 +286,9 @@ class EAGLEDraftCudaGraphRunner:
+     def replay(self, forward_batch: ForwardBatch):
+         assert forward_batch.out_cache_loc is not None
+         raw_bs = forward_batch.batch_size
++        if self.eagle_worker._tlt_reflex is not None:
++            self.eagle_worker._tlt_reflex.wait_for_update()
++            self._tlt_valid_bs.fill_(raw_bs)
+         raw_num_token = raw_bs * self.num_tokens_per_bs
+
+         # Pad
+diff --git a/third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py b/third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py
+index 574b129..3c32c74 100644
+--- a/third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py
++++ b/third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py
+@@ -80,6 +80,8 @@ class EAGLEDraftExtendCudaGraphRunner:
+         with torch.device("cuda"):
+             self.input_ids = torch.zeros((self.max_num_token,), dtype=torch.int64)
+             self.req_pool_indices = torch.zeros((self.max_bs,), dtype=torch.int32)
++            self._tlt_valid_bs = (torch.zeros((), dtype=torch.int32)
++                if self.eagle_worker._tlt_reflex is not None else None)
+             self.out_cache_loc = torch.ones((self.max_num_token,), dtype=torch.int64)
+             self.positions = torch.zeros((self.max_num_token,), dtype=torch.int64)
+             self.mrope_positions = torch.zeros(
+@@ -291,8 +293,14 @@ class EAGLEDraftExtendCudaGraphRunner:
+                 forward_batch.positions,
+                 forward_batch,
+             )
+-            probs = torch.softmax(ret.next_token_logits, dim=-1)
+-            ret.topk_p, ret.topk_index = fast_topk(probs, self.topk, dim=-1)
++            reflex = self.eagle_worker._tlt_reflex
++            if reflex is None:
++                probs = torch.softmax(ret.next_token_logits, dim=-1)
++                ret.topk_p, ret.topk_index = fast_topk(probs, self.topk, dim=-1)
++            else:
++                ret.topk_p, ret.topk_index = reflex.propose(
++                    ret.next_token_logits, ret.opd_head_input, req_pool_indices,
++                    topk=self.topk, valid_bs=self._tlt_valid_bs)
+
+             forward_batch.out_cache_loc = output_cache_loc_backup
+             forward_batch.spec_info.hidden_states = hidden_states_backup
+@@ -317,6 +325,9 @@ class EAGLEDraftExtendCudaGraphRunner:
+         # batch_size and num_seqs can be different in case there are finished examples
+         # in the batch, which will not be counted as num_seqs
+         raw_bs = forward_batch.batch_size
++        if self.eagle_worker._tlt_reflex is not None:
++            self.eagle_worker._tlt_reflex.wait_for_update()
++            self._tlt_valid_bs.fill_(raw_bs)
+         num_tokens = forward_batch.input_ids.shape[0]
+         if self.require_mlp_tp_gather:
+             max_num_tokens = max(forward_batch.global_num_tokens_cpu)
+diff --git a/third-party/sglang/python/sglang/srt/speculative/eagle_info.py b/third-party/sglang/python/sglang/srt/speculative/eagle_info.py
+index 4373aa3..090a13e 100644
+--- a/third-party/sglang/python/sglang/srt/speculative/eagle_info.py
++++ b/third-party/sglang/python/sglang/srt/speculative/eagle_info.py
+@@ -75,6 +75,9 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
+     def get_spec_adjust_token_coefficient(self) -> Tuple[int, int]:
+         return self.draft_token_num, self.draft_token_num
+
++    opd_parents: Optional[torch.Tensor] = None
++    opd_feedback_contexts: Optional[torch.Tensor] = None
++
+     @classmethod
+     def create_idle_input(cls, topk: int, spec_steps: int, num_verify_tokens: int):
+         return cls(
+@@ -348,6 +351,13 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
+                 spec_steps=self.spec_steps,
+             )
+
++        reflex = getattr(batch.req_to_token_pool, "_tlt_reflex", None)
++        if reflex is not None:
++            greedy_teacher = is_all_greedy or not TREE_SPEC_KERNEL_AVAILABLE
++            reflex.feedback(target_predict if greedy_teacher else target_probs,
++                accept_index, batch.req_pool_indices, self.opd_parents,
++                self.opd_feedback_contexts, greedy=greedy_teacher)
++
+         unfinished_index = []
+         unfinished_accept_index = []
+         accept_index_cpu = accept_index.tolist()
 diff --git a/third-party/sglang/python/sglang/srt/speculative/eagle_worker.py b/third-party/sglang/python/sglang/srt/speculative/eagle_worker.py
-index 28aeb38..1da38af 100644
+index 28aeb38..a385e95 100644
 --- a/third-party/sglang/python/sglang/srt/speculative/eagle_worker.py
 +++ b/third-party/sglang/python/sglang/srt/speculative/eagle_worker.py
-@@ -107,6 +107,9 @@ class EAGLEWorker(TpModelWorker):
-         self.padded_static_len = -1
-         self.strategy_min_bs = None
-         self.strategy_max_bs = None
+@@ -104,6 +104,9 @@ class EAGLEWorker(TpModelWorker):
+         self.speculative_algorithm = SpeculativeAlgorithm.from_string(
+             server_args.speculative_algorithm
+         )
 +        from tlt_reflex.integration import make_meter
 +        self._tlt_meter = make_meter()
 +        self._tlt_reflex = None
- 
-         # Override the context length of the draft model to be the same as the target model.
-         server_args.context_length = target_worker.model_runner.model_config.context_len
-@@ -179,6 +182,10 @@ class EAGLEWorker(TpModelWorker):
+         self.padded_static_len = -1
+         self.strategy_min_bs = None
+         self.strategy_max_bs = None
+@@ -179,6 +182,9 @@ class EAGLEWorker(TpModelWorker):
              # Share the embedding and lm_head
              self.draft_model_runner.model.set_embed_and_head(embed, head)
- 
-+        # Request-slot state exists BEFORE any MAB/CUDA graph capture.
+
 +        from tlt_reflex.integration import make_reflex
 +        self._tlt_reflex = make_reflex(self, embed)
 +
          # Init attention backend and cuda graphs
          self.draft_model_runner.server_args.disable_cuda_graph = (
              backup_disable_cuda_graph
-@@ -413,7 +420,8 @@ class EAGLEWorker(TpModelWorker):
- 
-             if enable_sd:
-                 with self.draft_tp_context(self.draft_model_runner.tp_group):
--                    self.forward_draft_extend(batch, logits_output.hidden_states, next_token_ids, seq_lens_cpu)
-+                    with self._tlt_meter.section("draft_extend_ms") if self._tlt_meter else empty_context():
-+                        self.forward_draft_extend(batch, logits_output.hidden_states, next_token_ids, seq_lens_cpu)
-             return GenerationBatchResult(
-                 logits_output=logits_output,
-                 next_token_ids=next_token_ids,
-@@ -471,15 +479,20 @@ class EAGLEWorker(TpModelWorker):
+@@ -471,15 +477,20 @@ class EAGLEWorker(TpModelWorker):
              batch.spec_info.topk_index = batch.spec_info.topk_index[:, : self.topk]
- 
+
              with self.draft_tp_context(self.draft_model_runner.tp_group):
 -                spec_info = self.draft(batch)
 -            logits_output, verify_output, model_worker_batch, can_run_cuda_graph = self.verify(batch, spec_info)
@@ -45,7 +238,7 @@ index 28aeb38..1da38af 100644
 +                logits_output, verify_output, model_worker_batch, can_run_cuda_graph = self.verify(batch, spec_info)
 +            if self._tlt_meter:
 +                self._tlt_meter.verified(verify_output.accept_length_per_req_cpu, spec_info.draft_token_num - 1)
- 
+
              with self.draft_tp_context(self.draft_model_runner.tp_group):
                  # NOTE: We should use `check_forward_draft_extend_after_decode`
                  # when DP attention is enabled, but it is slow. Skip it for now.
@@ -54,23 +247,63 @@ index 28aeb38..1da38af 100644
 -                    self.forward_draft_extend_after_decode(batch)
 +                    with self._tlt_meter.section("draft_extend_ms") if self._tlt_meter else empty_context():
 +                        self.forward_draft_extend_after_decode(batch)
- 
+
              if self.use_mab:
                  events["processing_end"].record()
-@@ -808,7 +821,11 @@ class EAGLEWorker(TpModelWorker):
+@@ -677,6 +688,9 @@ class EAGLEWorker(TpModelWorker):
+         spec_info.num_tokens_for_logprob_per_batch = self.topk
+         batch.return_hidden_states = False
+
++        if self._tlt_reflex is not None and not batch.forward_mode.is_idle():
++            self._tlt_reflex.refresh_root(spec_info, batch.req_pool_indices, self.topk)
++
+         # Get forward batch
+         model_worker_batch = batch.get_model_worker_batch()
+         assert model_worker_batch.capture_hidden_mode == CaptureHiddenMode.LAST
+@@ -729,7 +743,14 @@ class EAGLEWorker(TpModelWorker):
+             self.speculative_num_draft_tokens,
+         )
+
++        opd_parents = opd_feedback_contexts = None
++        if self._tlt_reflex is not None:
++            opd_parents, opd_feedback_contexts = self._tlt_reflex.tree_metadata(
++                top_scores_index, parent_list, batch.req_pool_indices,
++                self.topk, self.speculative_num_steps)
+         return EagleVerifyInput(
++            opd_parents=opd_parents,
++            opd_feedback_contexts=opd_feedback_contexts,
+             draft_token=draft_tokens,
+             custom_mask=tree_mask,
+             positions=position,
+@@ -779,6 +800,9 @@ class EAGLEWorker(TpModelWorker):
+             score_list.append(tree_info[0])
+             token_list.append(tree_info[1])
+             parents_list.append(tree_info[2])
++            opd_expanded = None
++            if self._tlt_reflex is not None and i < self.speculative_num_steps - 1:
++                opd_expanded = tree_info[2][:, 1:] if i == 0 else tree_info[2]
+             # We don't need to run the last forward. we get 1 token from draft prefill and (#spec steps - 1) tokens here
+             if i == self.speculative_num_steps - 1:
+                 break
+@@ -808,8 +832,15 @@ class EAGLEWorker(TpModelWorker):
                  forward_batch, skip_attn_backend_init=True
              )
              self._detect_nan_if_needed(logits_output)
 -            probs = torch.softmax(logits_output.next_token_logits, dim=-1)
-+            draft_logits = logits_output.next_token_logits
-+            if self._tlt_reflex is not None:
-+                draft_logits = self._tlt_reflex.correct(draft_logits, logits_output.hidden_states,
-+                    forward_batch.req_pool_indices, valid_bs=getattr(forward_batch, "_tlt_valid_bs", None))
-+            probs = torch.softmax(draft_logits, dim=-1)
-             topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
+-            topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
++            if self._tlt_reflex is None:
++                probs = torch.softmax(logits_output.next_token_logits, dim=-1)
++                topk_p, topk_index = fast_topk(probs, self.topk, dim=-1)
++            else:
++                topk_p, topk_index = self._tlt_reflex.propose(
++                    logits_output.next_token_logits, logits_output.opd_head_input,
++                    forward_batch.req_pool_indices, topk=self.topk,
++                    offset=1+i*self.topk, expanded_ids=opd_expanded,
++                    valid_bs=getattr(forward_batch, "_tlt_valid_bs", None))
              if self.hot_token_id is not None:
                  topk_index = self.hot_token_id[topk_index]
-@@ -1031,7 +1048,7 @@ class EAGLEWorker(TpModelWorker):
+             hidden_states = logits_output.hidden_states
+@@ -1031,7 +1062,7 @@ class EAGLEWorker(TpModelWorker):
          self._detect_nan_if_needed(logits_output)
          assert isinstance(forward_batch.spec_info, EagleDraftInput)
          assert forward_batch.spec_info is batch.spec_info
@@ -79,189 +312,51 @@ index 28aeb38..1da38af 100644
          has_finished, unfinished_req_index = False, []
          for i, req in enumerate(batch.reqs):
              if req.finished():
-@@ -1121,7 +1138,7 @@ class EAGLEWorker(TpModelWorker):
+@@ -1121,7 +1152,7 @@ class EAGLEWorker(TpModelWorker):
              logits_output, _ = self.draft_model_runner.forward(
                  forward_batch, skip_attn_backend_init=True
              )
 -            self.capture_for_decode(logits_output, forward_batch.spec_info)
 +            self.capture_for_decode(logits_output, forward_batch.spec_info, forward_batch.req_pool_indices)
- 
+
          self._detect_nan_if_needed(logits_output)
- 
-@@ -1137,9 +1154,16 @@ class EAGLEWorker(TpModelWorker):
+
+@@ -1137,13 +1168,19 @@ class EAGLEWorker(TpModelWorker):
          batch.return_logprob = return_logprob_backup
- 
+
      def capture_for_decode(
 -        self, logits_output: LogitsProcessorOutput, draft_input: EagleDraftInput
 +        self, logits_output: LogitsProcessorOutput, draft_input: EagleDraftInput,
 +        req_pool_indices=None,
      ):
 -        probs = torch.softmax(logits_output.next_token_logits, dim=-1)
-+        draft_logits = logits_output.next_token_logits
-+        if self._tlt_reflex is not None:
-+            draft_logits = self._tlt_reflex.correct(draft_logits, logits_output.hidden_states,
-+                                                  req_pool_indices, root=True)
-+        probs = torch.softmax(draft_logits, dim=-1)
-+        if self._tlt_reflex is not None:
-+            self._tlt_reflex.cache_root(probs, req_pool_indices)
-         # Always get max_topk candidates to match CUDA graph buffer size
-         draft_input.topk_p, draft_input.topk_index = fast_topk(
-             probs, self.max_topk, dim=-1
-@@ -1406,4 +1430,4 @@ def get_last_loc_large_page_size_large_top_k(
-         prefix_lens,
-     )
- 
--    return prefix_lens, seq_lens, last_loc, num_new_pages_per_topk, extend_lens
-\ No newline at end of file
-+    return prefix_lens, seq_lens, last_loc, num_new_pages_per_topk, extend_lens
-diff --git a/third-party/sglang/python/sglang/srt/speculative/eagle_info.py b/third-party/sglang/python/sglang/srt/speculative/eagle_info.py
-index 4373aa3..16128b2 100644
---- a/third-party/sglang/python/sglang/srt/speculative/eagle_info.py
-+++ b/third-party/sglang/python/sglang/srt/speculative/eagle_info.py
-@@ -348,6 +348,14 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
-                 spec_steps=self.spec_steps,
-             )
- 
-+        # Consume the EXISTING filtered teacher distribution and verifier root
-+        # indices. No sampling/softmax/target forward/tree scan added here.
-+        reflex = getattr(batch.req_to_token_pool, "_tlt_reflex", None)
-+        if reflex is not None:
-+            teacher = target_predict if is_all_greedy or not TREE_SPEC_KERNEL_AVAILABLE else target_probs
-+            reflex.feedback(teacher, accept_index[:, 0], batch.req_pool_indices,
-+                            greedy=is_all_greedy or not TREE_SPEC_KERNEL_AVAILABLE)
-+
-         unfinished_index = []
-         unfinished_accept_index = []
-         accept_index_cpu = accept_index.tolist()
-diff --git a/third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py b/third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
-index 94858f9..336e082 100644
---- a/third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
-+++ b/third-party/sglang/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
-@@ -84,6 +84,8 @@ class EAGLEDraftCudaGraphRunner:
-         with torch.device("cuda"):
-             self.input_ids = torch.zeros((self.max_num_token,), dtype=torch.int64)
-             self.req_pool_indices = torch.zeros((self.max_bs,), dtype=torch.int32)
-+            self._tlt_valid_bs = (torch.zeros((), dtype=torch.int32)
-+                                  if self.eagle_worker._tlt_reflex is not None else None)
-             self.seq_lens = torch.full(
-                 (self.max_bs,), self.seq_len_fill_value, dtype=torch.int32
-             )
-@@ -240,6 +242,10 @@ class EAGLEDraftCudaGraphRunner:
-             global_num_tokens_for_logprob_gpu=global_num_tokens_for_logprob,
-         )
- 
-+        # Dummy/padded rows retain upstream attention indices; plugin alone
-+        # masks them by this preallocated GPU scalar, not fixed batch rows.
-+        forward_batch._tlt_valid_bs = self._tlt_valid_bs
-+
-         # Attention backend
-         self.model_runner.draft_attn_backend.init_forward_metadata_capture_cuda_graph(
-             forward_batch
-@@ -283,6 +289,8 @@ class EAGLEDraftCudaGraphRunner:
-     def replay(self, forward_batch: ForwardBatch):
-         assert forward_batch.out_cache_loc is not None
-         raw_bs = forward_batch.batch_size
-+        if self.eagle_worker._tlt_reflex is not None:
-+            self._tlt_valid_bs.fill_(raw_bs)
-         raw_num_token = raw_bs * self.num_tokens_per_bs
- 
-         # Pad
-diff --git a/third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py b/third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py
-index 574b129..8aa5f70 100644
---- a/third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py
-+++ b/third-party/sglang/python/sglang/srt/speculative/eagle_draft_extend_cuda_graph_runner.py
-@@ -80,6 +80,8 @@ class EAGLEDraftExtendCudaGraphRunner:
-         with torch.device("cuda"):
-             self.input_ids = torch.zeros((self.max_num_token,), dtype=torch.int64)
-             self.req_pool_indices = torch.zeros((self.max_bs,), dtype=torch.int32)
-+            self._tlt_valid_bs = (torch.zeros((), dtype=torch.int32)
-+                                  if self.eagle_worker._tlt_reflex is not None else None)
-             self.out_cache_loc = torch.ones((self.max_num_token,), dtype=torch.int64)
-             self.positions = torch.zeros((self.max_num_token,), dtype=torch.int64)
-             self.mrope_positions = torch.zeros(
-@@ -291,7 +293,14 @@ class EAGLEDraftExtendCudaGraphRunner:
-                 forward_batch.positions,
-                 forward_batch,
-             )
--            probs = torch.softmax(ret.next_token_logits, dim=-1)
-+            draft_logits = ret.next_token_logits
-+            reflex = self.eagle_worker._tlt_reflex
-+            if reflex is not None:
-+                draft_logits = reflex.correct(draft_logits, ret.hidden_states, req_pool_indices,
-+                                              root=True, valid_bs=self._tlt_valid_bs)
-+            probs = torch.softmax(draft_logits, dim=-1)
-+            if reflex is not None:
-+                reflex.cache_root(probs, req_pool_indices, valid_bs=self._tlt_valid_bs)
-             ret.topk_p, ret.topk_index = fast_topk(probs, self.topk, dim=-1)
- 
-             forward_batch.out_cache_loc = output_cache_loc_backup
-@@ -317,6 +326,8 @@ class EAGLEDraftExtendCudaGraphRunner:
-         # batch_size and num_seqs can be different in case there are finished examples
-         # in the batch, which will not be counted as num_seqs
-         raw_bs = forward_batch.batch_size
-+        if self.eagle_worker._tlt_reflex is not None:
-+            self._tlt_valid_bs.fill_(raw_bs)
-         num_tokens = forward_batch.input_ids.shape[0]
-         if self.require_mlp_tp_gather:
-             max_num_tokens = max(forward_batch.global_num_tokens_cpu)
-diff --git a/third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py b/third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py
-index c468269..d8d4f25 100644
---- a/third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py
-+++ b/third-party/sglang/python/sglang/srt/mem_cache/memory_pool.py
-@@ -98,10 +98,16 @@ class ReqToTokenPool:
- 
-         select_index = self.free_slots[:need_size]
-         self.free_slots = self.free_slots[need_size:]
-+        reflex = getattr(self, "_tlt_reflex", None)
-+        if reflex is not None:
-+            reflex.reset_slots(select_index, allocated=True)
- 
-         return select_index
- 
-     def free(self, free_index: Union[int, List[int]]):
-+        reflex = getattr(self, "_tlt_reflex", None)
-+        if reflex is not None:
-+            reflex.reset_slots(free_index, allocated=False)
-         if isinstance(free_index, (int,)):
-             self.free_slots.append(free_index)
-         else:
-@@ -109,6 +115,9 @@ class ReqToTokenPool:
- 
-     def clear(self):
-         self.free_slots = list(range(self.size))
-+        reflex = getattr(self, "_tlt_reflex", None)
-+        if reflex is not None:
-+            reflex.clear()
- 
- 
- class MambaPool:
-diff --git a/third-party/sglang/python/sglang/srt/managers/scheduler.py b/third-party/sglang/python/sglang/srt/managers/scheduler.py
-index 55873c3..d0fa5c9 100644
---- a/third-party/sglang/python/sglang/srt/managers/scheduler.py
-+++ b/third-party/sglang/python/sglang/srt/managers/scheduler.py
-@@ -2756,6 +2756,9 @@ class Scheduler(
-         if RECORD_STEP_TIME:
-             ret["step_time_dict"] = self.step_time_dict
- 
-+        meter = getattr(getattr(self, "draft_worker", None), "_tlt_meter", None)
-+        if meter is not None:
-+            ret["tlt_reflex_metrics"] = meter.report()
-         return GetInternalStateReqOutput(internal_state=ret)
- 
-     def set_internal_state(self, recv_req: SetInternalStateReq):
+-        # Always get max_topk candidates to match CUDA graph buffer size
+-        draft_input.topk_p, draft_input.topk_index = fast_topk(
+-            probs, self.max_topk, dim=-1
+-        )
++        if self._tlt_reflex is None:
++            probs = torch.softmax(logits_output.next_token_logits, dim=-1)
++            # Literal upstream baseline, including native tie behavior.
++            draft_input.topk_p, draft_input.topk_index = fast_topk(
++                probs, self.max_topk, dim=-1
++            )
++        else:
++            draft_input.topk_p, draft_input.topk_index = self._tlt_reflex.propose(
++                logits_output.next_token_logits, logits_output.opd_head_input,
++                req_pool_indices, topk=self.max_topk)
+         draft_input.hidden_states = logits_output.hidden_states
+
+     def _detect_nan_if_needed(self, logits_output: LogitsProcessorOutput):
 diff --git a/verl/trainer/constants_ppo.py b/verl/trainer/constants_ppo.py
-index b4e12f0..0750f7f 100644
+index b4e12f0..8f9ff7c 100644
 --- a/verl/trainer/constants_ppo.py
 +++ b/verl/trainer/constants_ppo.py
-@@ -44,4 +44,11 @@ def get_ppo_ray_runtime_env():
+@@ -44,4 +44,8 @@ def get_ppo_ray_runtime_env():
      for key in list(runtime_env["env_vars"].keys()):
          if os.environ.get(key) is not None:
              runtime_env["env_vars"].pop(key, None)
-+    # Add AFTER upstream's local-variable filter: Ray remote nodes must
-+    # receive plugin/import identity even if the driver already set it.
-+    for key in ("TLT_REFLEX_METHOD", "TLT_TRACE", "REFLEX_FEATURE_DIM", "REFLEX_LR",
-+                "REFLEX_WEIGHT_DECAY", "REFLEX_SEED", "REFLEX_PROFILE", "PYTHONPATH",
++    for key in os.environ:
++        if key.startswith("OPD_") or key in ("TLT_REFLEX_METHOD", "TLT_TRACE", "PYTHONPATH",
 +                "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE", "HF_DATASETS_OFFLINE"):
-+        if key in os.environ:
 +            runtime_env["env_vars"][key] = os.environ[key]
      return runtime_env
