@@ -125,7 +125,8 @@ def main(argv=None):
         seq_rounds=counters.get('sequence_verification_rounds',0)
         accepted=counters.get('accepted_draft_tokens')
         proposed=counters.get('proposed_draft_tokens')
-        report=dict(validation_scope='native_smoke' if a.smoke else 'official_benchmark',method=a.method,config=vars(a),engine_config=engine_args,canonical_config=canonical,
+        report=dict(run_position=int(os.environ['BENCH_RUN_POSITION']) if os.environ.get('BENCH_RUN_POSITION') else None,
+            run_order_policy=os.environ.get('BENCH_RUN_ORDER_POLICY'),validation_scope='native_smoke' if a.smoke else 'official_benchmark',method=a.method,config=vars(a),engine_config=engine_args,canonical_config=canonical,
             opd_projector_experiment=('off' if a.method=='tlt' else projector['provenance']),
             experiment_label=canonical['opd']['experiment'],projector_source=projector,
             experiment='TLT adaptive speculative rollout + fixed EAGLE3'+(' + OPD' if a.method=='tlt_opd_reflex' else ''),

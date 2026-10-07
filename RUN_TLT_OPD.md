@@ -18,7 +18,7 @@ export OPD_RANK=8 OPD_TOPK=16 OPD_FAST_LR=0.01 OPD_UPDATE_STREAM=1
 export OPD_TRAIN_PROJECTOR=0 OPD_PROFILE=0 OPD_DEBUG=0
 export OPD_MAX_SPECULATIVE_BATCH_SIZE=32
 export OPD_PROPOSAL_MODE=auto
-export OPD_PROPOSAL_PROFILE_DIR="$SOURCE_SPECNAACL_ROOT/outputs/benchmarks/opd_proposals"
+export OPD_PROPOSAL_PROFILE_DIR="$PWD/outputs/benchmarks/opd_proposals"
 unset OPD_PROPOSAL_PROFILE OPD_TUNE_OUTPUT
 
 bash scripts/bootstrap_upstream.sh
@@ -123,11 +123,11 @@ produce a single winner.
 ## Native smoke and paired benchmark
 
 ```bash
-# Acceptance order: native smoke -> real parity -> GPU tuning -> official pair.
+# Acceptance order: GPU tuning/profile validation -> native smoke -> real parity -> official pair.
 # Smoke does not need a parity certificate/profile, but provenance guards apply.
+bash scripts/tune_tlt_opd_proposals.sh
 bash scripts/smoke_tlt_opd.sh
 bash scripts/validate_tlt_eagle3_parity.sh
-bash scripts/tune_tlt_opd_proposals.sh
 
 # One LR/stream, multiple seeds and actual request batches1..32.
 BENCH_SEEDS=42,43 BENCH_BATCH_SIZES=1,2,4,8,16,32 \
@@ -166,28 +166,53 @@ full pool. Logs/report distinguish persistent and scratch MB.
 
 ## Proposal profiles and separate profiling
 
-Reuse your checked profile from SpecNaacl; no need to tune on benchmark prompts.
-Auto follows the source cost interpolation/argmin over sparse/fused/GEMM, using
-device active_count without host reads. Native TLT graph profiles take priority.
-A source profile remains a calibration prior: wrapper/compiler differences may
-change actual costs. A missing compatible profile permits only an explicitly scoped smoke/training
-fallback. Official OPD throughput runs FAIL and require an offline profile first.
-Explicit incompatible profiles fail. Native offline tuner:
+Official TLT+OPD uses **only TLT-native calibration** from this GPU/server.
+SpecNaacl profiles and old contiguous-ID profiles are rejected. Unset any previous
+explicit source profile and tune again:
 
 ```bash
-bash tune_tlt_opd_proposals.sh
-# Include larger actual workloads if needed:
-OPD_TUNE_SHAPES=1x1,2x1,4x1,8x1,16x1,32x1,8x4,32x4 \
-bash tune_tlt_opd_proposals.sh
+unset OPD_PROPOSAL_PROFILE OPD_TUNE_OUTPUT
+export OPD_PROPOSAL_PROFILE_DIR="$PWD/outputs/benchmarks/opd_proposals"
+export OPD_TUNE_SEED=42
+bash scripts/tune_tlt_opd_proposals.sh
 ```
 
-All three backends are measured and checked for bitwise proposal parity. Keys
-include GPU/CC/V/r/dtype/TopK/kernel+version hash. No generation-time autotuning.
-GEMM workspace is reserved before capture only when explicitly selected or when
-calibrated auto regions can choose it. Root B_version/root_B_version avoid head
-recomputation and projection when the cached proposal is fresh, including LR0 and
-zero-gradient/invalid-teacher feedback. Deep contexts are still cleared for each
-new tree. Cached proposals are gathered by stable slot IDs even after batch reorder.
+The tuner canonicalizes `(batch, contexts_per_request)` into `(batch*contexts,1)`
+and deduplicates effective contexts before benchmarking. Defaults produce exactly
+`[1,2,4,8,16,32,128]`; 32x1 and 8x4 share one bucket. Active rows use a seeded
+sorted randperm, not a contiguous prefix. Scattered IDs, B rows and bitmap agree.
+All sparse/fused/GEMM outputs must have bitwise parity. The profile is validated
+by ProposalProfile and the native consumer before an atomic write; failure never
+publishes a partial/invalid profile.
+
+Keys include GPU/CC, compact V/r/dtype/TopK, Torch/Triton/CUDA, kernel hash,
+TLT execution fingerprint and scattered-calibration version. An old profile cannot
+match the new execution key. Official runs with OPD_REQUIRE_CALIBRATED_PROFILE=1
+fail clearly when a matching native profile is absent; generation never tunes.
+Development smoke/training with requirement0 can use an uncalibrated fallback,
+but cannot reuse a SpecNaacl profile through this loader.
+
+Verify the real draft/GPU key and reload the profile:
+
+```bash
+"$PYTHON_BIN" scripts/validate_tlt_opd_profile.py \
+  --draft-config "$SOURCE_SPECNAACL_ROOT/outputs/pretrain/$MODEL_KEY/latest_draft_config.json" \
+  --draft-checkpoint "$SOURCE_SPECNAACL_ROOT/outputs/pretrain/$MODEL_KEY/latest_checkpoint" \
+  --vocab-mapping "$SOURCE_SPECNAACL_ROOT/outputs/pretrain/$MODEL_KEY/latest_vocab_mapping.pt" \
+  --rank "$OPD_RANK" --dtype bf16 --topk "$OPD_TOPK" \
+  --profile-dir "$OPD_PROPOSAL_PROFILE_DIR"
+```
+
+If using a different trained checkpoint/config/mapping, pass those same paths to
+both tuner/validator (DRAFT_CHECKPOINT/DRAFT_CONFIG/VOCAB_MAPPING overrides).
+Auto keeps the existing device cost interpolation/argmin over all three backends.
+Root versions, persistent caches, bounded scratch and OPD objective are unchanged.
+
+Pair order is counterbalanced by the **effective canonical sampling seed**:
+42/44 run TLT then OPD, 43/45 run OPD then TLT. Every case records run_order.json,
+and measured reports record physical run positions. This changes execution order
+only; both modes retain identical prompts/order/seed/weights/sampling/TLT/MAB,
+graphs, warmup and measured requests. Component runs use the same balanced order.
 
 ```bash
 COMPONENT_PROFILE=1 BATCH_SIZE=8 RESPONSES_PER_PROMPT=1 \
@@ -218,7 +243,7 @@ DP attention and quantized/scaled draft heads remain explicitly unsupported in O
 
 
 Canonical/output layout for the grid pair (defaults: batches1/2/4/8/16/32,
-seeds42/43): each `b<batch>_s<seed>/` contains `tlt/report.json`,
+seeds42/43, counterbalanced order): each `b<batch>_s<seed>/` contains `tlt/report.json`,
 `tlt_opd/report.json`, both `canonical_config.json` files, `comparison.json`,
 `summary.csv`, `config_diff.json`. The grid root also contains mode summaries,
 comparison/summary/config-diff and responses; aggregate responses are not counted

@@ -17,7 +17,10 @@ A trained SpecNaacl projector is preferred. Head-basis A is labelled untrained
 and requires `OPD_ALLOW_UNTRAINED_PROJECTOR=1`. Saved A is never overwritten;
 unverified training claims are rejected. Official OPD benchmarks require the
 real-checkpoint SGLang-vs-SpecNaacl representation certificate and zero orphan/
-invalid-context counters. Profiled component runs never rank throughput winners. Canonical preflight rejects
+invalid-context counters. Official profiles must be TLT-native with scattered-ID calibration and matching
+TLT execution keys; source/old contiguous profiles are rejected. Pair launch
+order is even-seed TLT-first, odd-seed OPD-first. Profiled component runs never
+rank throughput winners. Canonical preflight rejects
 any non-OPD config difference before generation; head-basis and trained-A reports
 remain distinct, with checkpoint/training source recorded.
 
@@ -33,3 +36,5 @@ smoke, paired benchmark, sweeps and all model wrappers.
 
 Native B200 AAL/tokens/s and real checkpoint parity have not been measured here;
 local CUDA fixtures are not substitutes. No end-to-end speedup is claimed.
+
+Latest B200 native tuning/validation/order sequence: [RUN_NATIVE_PROFILE_PAIR.md](RUN_NATIVE_PROFILE_PAIR.md).

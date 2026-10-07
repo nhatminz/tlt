@@ -12,15 +12,18 @@ METHOD=tlt_opd_reflex OPD_PROFILE=0 OUTPUT_DIR="$PAIR_DIR/tlt_opd" \
   CANONICAL_CONFIG_OUTPUT="$PAIR_DIR/tlt_opd/canonical_config.json" bash "$ROOT/run_benchmark.sh" "$@"
 "${PYTHON_BIN:-python3}" "$ROOT/scripts/check_tlt_opd_pair_config.py" \
   "$PAIR_DIR/tlt/canonical_config.json" "$PAIR_DIR/tlt_opd/canonical_config.json" --output "$PAIR_DIR/config_diff.json"
+"${PYTHON_BIN:-python3}" "$ROOT/scripts/pair_order.py" "$PAIR_DIR/tlt/canonical_config.json" \
+  --output "$PAIR_DIR/run_order.json" --entries-output "$PAIR_DIR/run_order.entries"
 if [[ "${DRY_RUN:-false}" == true ]];then exit 0;fi
-for entry in tlt:tlt tlt_opd_reflex:tlt_opd;do
-  mode="${entry%%:*}";folder="${entry#*:}"
-  METHOD="$mode" OUTPUT_DIR="$PAIR_DIR/$folder" OPD_PROFILE=0 bash "$ROOT/run_benchmark.sh" "$@"
-done
+position=0
+while IFS=: read -r mode folder;do
+  position=$((position+1))
+  METHOD="$mode" OUTPUT_DIR="$PAIR_DIR/$folder" OPD_PROFILE=0 BENCH_RUN_POSITION="$position" BENCH_RUN_ORDER_POLICY=seed_parity bash "$ROOT/run_benchmark.sh" "$@"
+done < "$PAIR_DIR/run_order.entries"
 "${PYTHON_BIN:-python3}" "$ROOT/scripts/summarize_tlt_opd.py" "$PAIR_DIR"
 if [[ "${COMPONENT_PROFILE:-0}" == 1 ]];then
-  for mode in tlt tlt_opd_reflex;do
+  while IFS=: read -r mode folder;do
     METHOD="$mode" OUTPUT_DIR="$PAIR_DIR/${mode}_components_eager" DISABLE_CUDA_GRAPH=1 OPD_PROFILE=1 \
       bash "$ROOT/run_benchmark.sh" "$@"
-  done
+  done < "$PAIR_DIR/run_order.entries"
 fi

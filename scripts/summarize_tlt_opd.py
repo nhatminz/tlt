@@ -66,6 +66,7 @@ def summarize(directory):
                     generation_wall_s=r['generation_wall_s']-base['generation_wall_s'],
                     peak_allocated_gb=(r['peak_allocated_gb']-base['peak_allocated_gb']) if r.get('peak_allocated_gb') is not None and base.get('peak_allocated_gb') is not None else None,
                     peak_reserved_gb=(r['peak_reserved_gb']-base['peak_reserved_gb']) if r.get('peak_reserved_gb') is not None and base.get('peak_reserved_gb') is not None else None),
+                run_positions=dict(tlt=base.get('run_position'),opd=r.get('run_position')),
                 projector_experiment=r.get('opd_projector_experiment','unspecified'),opd_overhead_ms=r.get('total_opd_overhead_ms'),throughput_ratio=ratio))
         if good:eligible.append(r)
     root.mkdir(parents=True,exist_ok=True)
@@ -73,6 +74,7 @@ def summarize(directory):
         experiment='TLT adaptive speculative rollout + fixed EAGLE3 vs same + OPD',
         recommendation_rule='delta verified AAL > 0 AND tokens/s > paired baseline; no statistical significance claimed'),indent=2)+'\n')
     comparison=json.loads((root/'report.json').read_text())
+    comparison['run_orders']=[dict(case=str(path.parent.relative_to(root)),**json.loads(path.read_text())) for path in sorted(root.rglob('run_order.json'))]
     comparison['projector_experiments']=sorted({r.get('opd_projector_experiment','unspecified') for r in reports if r['method']=='tlt_opd_reflex'})
     (root/'comparison.json').write_text(json.dumps(comparison,indent=2)+'\n')
     if not (root/'config_diff.json').is_file():

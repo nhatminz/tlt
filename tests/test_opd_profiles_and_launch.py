@@ -8,20 +8,24 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 def profile(key):
-    return dict(execution_key=key,records=[dict(contexts=1,trials=[dict(slots=0,sparse=1,fused=2,gemm=3),dict(slots=37,sparse=3,fused=2,gemm=4)])])
+    return dict(profile_kind='tlt_native',benchmark_metadata=dict(cuda_graph=True,active_id_pattern='seeded_sorted_randperm'),execution_key=key,records=[dict(contexts=1,trials=[dict(slots=0,sparse=1,fused=2,gemm=3),dict(slots=37,sparse=3,fused=2,gemm=4)])])
 
 
-def test_reuse_source_profile_and_reject_stale_gpu_hash_dtype(tmp_path,monkeypatch):
+def test_native_profile_rejects_source_and_stale_gpu_execution_keys(tmp_path,monkeypatch):
     from tlt_reflex import profiles
-    hw=dict(gpu='B200',compute_capability=[10,0],torch='test',triton='test',cuda='test',kernel_sha256='tlt')
-    source=dict(hw,kernel_sha256='spec')
-    monkeypatch.setattr(profiles,'fingerprint',lambda device=None,source=False:dict(hw,kernel_sha256='spec' if source else 'tlt'))
-    key=execution_key(source,37,8,'fp32',16);file=tmp_path/'source.json';file.write_text(json.dumps(profile(key)))
+    hw=dict(gpu='B200',compute_capability=[10,0],torch='test',triton='test',cuda='test',kernel_sha256='tlt',
+        tlt_execution_sha256='execution',calibration_version='v3')
+    monkeypatch.setattr(profiles,'fingerprint',lambda device=None:hw)
+    key=execution_key(hw,37,8,'fp32',16);file=tmp_path/'native.json';file.write_text(json.dumps(profile(key)))
     monkeypatch.setenv('OPD_PROPOSAL_PROFILE_DIR',str(tmp_path));monkeypatch.delenv('OPD_PROPOSAL_PROFILE',raising=False)
+    monkeypatch.setenv('OPD_REQUIRE_CALIBRATED_PROFILE','1')
     selector,path=discover(37,8,torch.float32,16)
     assert path==str(file) and selector is not None
+    file.write_text(json.dumps(dict(profile(key),profile_kind='specnaacl')))
+    with pytest.raises(ValueError,match='TLT-native'):discover(37,8,torch.float32,16)
     monkeypatch.setenv('OPD_PROPOSAL_PROFILE',str(file))
-    for field,value in [('gpu','3090'),('kernel_sha256','old'),('dtype','torch.bfloat16')]:
+    for field,value in [('gpu','3090'),('compute_capability',[8,6]),('kernel_sha256','old'),
+                        ('dtype','torch.bfloat16'),('tlt_execution_sha256','old-execution')]:
         file.write_text(json.dumps(profile(dict(key,**{field:value}))))
         with pytest.raises(ValueError,match='incompatible'):discover(37,8,torch.float32,16)
 
@@ -39,7 +43,7 @@ printf '%s\\n' "$METHOD" "$MODEL" "$DATASET_PATH" "$DRAFT_CHECKPOINT" "$OPD_FAST
     assert lines[2].endswith('/data/simplelr_abel_level3to5/train.parquet')
     assert '/SpecNaacl/outputs/pretrain/qwen25_3b/latest_checkpoint' in lines[3]
     assert lines[4:7]==['0.01','1','0']
-    assert '/SpecNaacl/outputs/benchmarks/opd_proposals' in lines[7]
+    assert '/TltReflex/outputs/benchmarks/opd_proposals' in lines[7]
     assert mode in (ROOT/wrapper).read_text()
 
 
