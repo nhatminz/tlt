@@ -38,7 +38,17 @@ def require_parity_report(path,target,draft):
     sources=payload.get('source_code_identity',{})
     if not sources or any(not Path(path).is_file() or sha(path)!=digest for path,digest in sources.items()):
         raise ValueError('SpecNaacl source differs from the certified representation; regenerate validation')
+    if 'max_abs_corrected_logits_error' not in payload or 'max_abs_top16_probability_error' not in payload:
+        raise ValueError('legacy parity report lacks corrected logits/probability validation; regenerate it')
     return payload
+
+
+def corrected_logits(raw,u,adapter):
+    """Offline dense observation of the core's ordered FP32 correction equation."""
+    import torch
+    delta=torch.zeros_like(raw,dtype=torch.float32)
+    for rank in range(u.shape[-1]):delta.add_(u[:,rank:rank+1].float()*adapter[:,rank].float()[None,:])
+    return raw.float()+delta
 
 
 def install_native_recorder(model,state,path):
@@ -76,24 +86,29 @@ def install_native_recorder(model,state,path):
             slot=batch.req_pool_indices.long()
             payload=dict(**inputs,head_input=output.opd_head_input.detach().cpu(),raw_logits=output.next_token_logits.detach().cpu(),
                 u=state.u_cache[slot,0].detach().cpu(),top16_ids=ids.detach().cpu(),top16_probs=q.detach().cpu(),
-                projector=state.projector.detach().cpu(),B=b.cpu(),projector_provenance=state.projector_provenance)
+                projector=state.projector.detach().cpu(),B=b.cpu(),
+                corrected_logits=corrected_logits(output.next_token_logits,state.u_cache[slot,0],b).cpu(),
+                projector_provenance=state.projector_provenance)
             path.parent.mkdir(parents=True,exist_ok=True);torch.save(payload,path)
         return output
     model.forward=forward
 
 
-def compare_payloads(native,source,*,head_atol=.02,logits_atol=.05,u_atol=.02,min_top16_agreement=1.):
+def compare_payloads(native,source,*,head_atol=.02,logits_atol=.05,u_atol=.02,corrected_atol=.05,probability_atol=2e-4,min_top16_agreement=1.):
     import torch
     def error(key):
+        if key not in native or key not in source:return float('inf')
         a,b=native[key].float(),source[key].float()
         if a.shape!=b.shape or not torch.isfinite(a).all() or not torch.isfinite(b).all():return float('inf')
         return float((a-b).abs().max())
-    errors=dict(max_abs_head_input_error=error('head_input'),max_abs_logits_error=error('raw_logits'),max_abs_u_error=error('u'))
+    errors=dict(max_abs_head_input_error=error('head_input'),max_abs_raw_logits_error=error('raw_logits'),
+        max_abs_logits_error=error('raw_logits'),max_abs_u_error=error('u'),max_abs_corrected_logits_error=error('corrected_logits'))
     if native['top16_ids'].shape!=source['top16_ids'].shape:agreement=0.
     else:agreement=float((native['top16_ids']==source['top16_ids']).float().mean())
     errors['top16_agreement']=agreement
     errors['max_abs_top16_probability_error']=error('top16_probs')
     errors['passed']=(errors['max_abs_head_input_error']<=head_atol and errors['max_abs_logits_error']<=logits_atol
-        and errors['max_abs_u_error']<=u_atol and agreement>=min_top16_agreement
+        and errors['max_abs_u_error']<=u_atol and errors['max_abs_corrected_logits_error']<=corrected_atol
+        and errors['max_abs_top16_probability_error']<=probability_atol and agreement>=min_top16_agreement
         and torch.equal(native['projector'],source['projector']))
     return errors

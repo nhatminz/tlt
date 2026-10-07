@@ -21,6 +21,7 @@ def parse_args(argv=None):
     p.add_argument('--top-k',type=int,default=-1)
     p.add_argument('--seed',type=int,default=42)
     p.add_argument('--tp',type=int,default=1)
+    p.add_argument('--dp',type=int,choices=[1],default=1,help='current benchmark telemetry supports DP1')
     p.add_argument('--steps',type=int,default=8)
     p.add_argument('--tree-tokens',type=int,default=48)
     p.add_argument('--draft-topk',type=int,default=4)
@@ -35,6 +36,8 @@ def parse_args(argv=None):
     p.add_argument('--pristine-upstream',action='store_true',help='load unmodified official SGLang for a separate TLT-only equivalence check')
     p.add_argument('--warmup',type=int,default=1)
     p.add_argument('--validate-config',action='store_true')
+    p.add_argument('--smoke',action='store_true',help='short native validation only; no official benchmark/certificate/profile requirement')
+    p.add_argument('--dump-canonical-config',metavar='PATH')
     a=p.parse_args(argv)
     if min(a.batch_size,a.responses,a.prompts,a.max_new_tokens,a.tp,a.steps,a.tree_tokens,a.draft_topk)<1:
         p.error('counts must be positive')
@@ -42,6 +45,7 @@ def parse_args(argv=None):
         p.error('inner component profiling requires explicit --disable-cuda-graph for BOTH methods; throughput run is separate')
     if a.pristine_upstream and (a.method!='tlt' or a.profile):
         p.error('pristine upstream comparison requires unprofiled METHOD=tlt')
+    if a.warmup<0:p.error('warmup must be nonnegative')
     return a
 
 
@@ -56,26 +60,30 @@ def metric_delta(after,before):
 
 
 def engine_request_capacity(a):
-    capacity=a.batch_size*a.responses
-    if a.mab_configs and a.mab in ('BEG','PREDEFINED'):
-        # Upstream eagerly captures ALL bucket strategies. A batch1 engine
-        # limited to one slot would have an empty capture set for bucket21+.
-        # Reserve capacity, not extra requests; both methods submit identical
-        # B*n responses. No change to BEG thresholds/strategy selection.
-        minimum=max(map(int,a.mab_buckets.split(',')))
-        capacity=max(capacity,1<<(minimum-1).bit_length())
-    return capacity
+    from tlt_reflex.benchmark_config import request_capacity
+    return request_capacity(a)
 
 
 def main(argv=None):
     a=parse_args(argv)
+    from tlt_reflex.benchmark_config import canonical_config,engine_config,sampling_config
+    canonical=canonical_config(a)
+    if a.dump_canonical_config:
+        path=Path(a.dump_canonical_config);path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(json.dumps(canonical,indent=2)+'\n');return
     if a.validate_config:
         print(json.dumps(vars(a),indent=2));return
     if Path(a.output).exists():raise FileExistsError('use a NEW benchmark output')
     if os.environ.get('OPD_EAGLE3_PARITY_CAPTURE'):
         raise ValueError('offline parity recorder must never run in a throughput benchmark')
+    projector=canonical['opd']['projector']
     parity=None
-    if a.method=='tlt_opd_reflex':
+    if a.smoke:os.environ['OPD_REQUIRE_CALIBRATED_PROFILE']='0'
+    if a.method=='tlt_opd_reflex' and not a.smoke:
+        if projector['provenance']=='trained' and (projector['training_dataset'] is None or projector['training_steps'] is None):
+            raise ValueError('trained-A benchmark requires recorded source training dataset/steps; set OPD_PROJECTOR_TRAINING_DATASET/STEPS when exporting')
+        os.environ['OPD_REQUIRE_CALIBRATED_PROFILE']='1'
+        canonical['opd']['require_calibrated_profile']=True
         from tlt_reflex.parity import require_parity_report
         parity=require_parity_report(os.environ.get('OPD_EAGLE3_PARITY_REPORT',''),a.model,a.draft)
     configure(a.method,pristine=a.pristine_upstream)
@@ -92,24 +100,13 @@ def main(argv=None):
     prompts=tokenizer.apply_chat_template(messages,
                                          tokenize=False,add_generation_prompt=True)
     prompts=[tokenizer.encode(x)[:a.max_prompt_length] for x in prompts]
-    engine_args=dict(model_path=a.model,speculative_algorithm='EAGLE3',speculative_draft_model_path=a.draft,
-        dtype='bfloat16',tp_size=a.tp,random_seed=a.seed,disable_overlap_schedule=True,
-        speculative_num_steps=a.steps,speculative_eagle_topk=a.draft_topk,
-        speculative_num_draft_tokens=a.tree_tokens,
-        apdative_speculative_batch_size_threshold=a.sd_threshold,
-        speculative_eagle_mab_algorithm=a.mab,speculative_eagle_mab_configs=a.mab_configs.split(',') if a.mab_configs else [],
-        speculative_mab_bs_threshold=list(map(int,a.mab_buckets.split(','))),
-        max_running_requests=engine_request_capacity(a),cuda_graph_max_bs=engine_request_capacity(a),
-        context_length=a.max_prompt_length+a.max_new_tokens+a.steps+1,
-        attention_backend=a.attention_backend,mem_fraction_static=a.memory_fraction,
-        disable_cuda_graph=a.disable_cuda_graph)
+    engine_args=engine_config(a)
     from tlt_reflex.parity import artifact_identity
     artifacts=artifact_identity(a.model,a.draft)
     import hashlib
     prompt_hash=hashlib.sha256(json.dumps(prompts,separators=(',',':')).encode()).hexdigest()
     engine=sg.Engine(**engine_args)
-    sampling=dict(n=a.responses,temperature=a.temperature,top_p=a.top_p,top_k=a.top_k,
-                  max_new_tokens=a.max_new_tokens)
+    sampling=sampling_config(a)
     try:
         for _ in range(a.warmup):engine.generate(input_ids=prompts[:a.batch_size],sampling_params=sampling)
         baseline=engine.get_server_info()
@@ -128,7 +125,9 @@ def main(argv=None):
         seq_rounds=counters.get('sequence_verification_rounds',0)
         accepted=counters.get('accepted_draft_tokens')
         proposed=counters.get('proposed_draft_tokens')
-        report=dict(method=a.method,config=vars(a),engine_config=engine_args,
+        report=dict(validation_scope='native_smoke' if a.smoke else 'official_benchmark',method=a.method,config=vars(a),engine_config=engine_args,canonical_config=canonical,
+            opd_projector_experiment=('off' if a.method=='tlt' else projector['provenance']),
+            experiment_label=canonical['opd']['experiment'],projector_source=projector,
             experiment='TLT adaptive speculative rollout + fixed EAGLE3'+(' + OPD' if a.method=='tlt_opd_reflex' else ''),
             spot_trainer_enabled=False,real_eagle3_parity=parity,artifact_identity=artifacts,
             prompt_token_sha256=prompt_hash,measured_prompts=len(prompts),
@@ -169,6 +168,9 @@ def main(argv=None):
             opd_feature_time_ms=times.get('opd_feature_ms') if a.profile else None,
             opd_root_head_time_ms=times.get('opd_root_head_ms') if a.profile else None,
             opd_orphan_nodes=final_metrics.get('counters',{}).get('opd_orphan_nodes',0),opd_invalid_contexts=final_metrics.get('counters',{}).get('opd_invalid_contexts',0),
+            opd_root_refresh_count=counters.get('opd_root_refresh_states',0),
+            opd_root_reuse_count=counters.get('opd_root_reused_states',0),
+            opd_proposal_profile=final_metrics.get('opd_proposal_profile'),
             opd_root_head_rows=counters.get('opd_root_head_rows',0),opd_root_reused_states=counters.get('opd_root_reused_states',0),
             opd_persistent_memory_mb=final_metrics.get('opd_metadata',{}).get('opd_persistent_memory_mb'),
             opd_scratch_memory_mb=final_metrics.get('opd_metadata',{}).get('opd_scratch_memory_mb'),
@@ -177,7 +179,7 @@ def main(argv=None):
             opd_union_time_ms=times.get('opd_union_loss_ms') if a.profile else None,
             opd_wait_time_ms=times.get('opd_wait_ms') if a.profile else None,
             opd_projector_metadata=final_metrics.get('opd_metadata',{}))
-        if report['opd_orphan_nodes'] or report['opd_invalid_contexts']:
+        if a.smoke or report['opd_orphan_nodes'] or report['opd_invalid_contexts']:
             report['valid_for_official_comparison']=False
         else:report['valid_for_official_comparison']=True
         if report['opd_nonfinite_kl_states']:report['opd_kl']=None

@@ -12,6 +12,19 @@ export RESPONSES_PER_PROMPT="${RESPONSES_PER_PROMPT:-1}"
 export BENCHMARK_PROMPTS="${BENCHMARK_PROMPTS:-64}"
 for batch in "${batches[@]}";do
   for seed in "${seeds[@]}";do
+    # Preflight every variant before the baseline starts; only OPD knobs differ.
+    METHOD=tlt BATCH_SIZE="$batch" SEED="$seed" OUTPUT_DIR="$SWEEP_DIR/b${batch}_s${seed}_tlt" \
+      CANONICAL_CONFIG_OUTPUT="$SWEEP_DIR/b${batch}_s${seed}_tlt/canonical_config.json" bash "$ROOT/run_benchmark.sh" "$@"
+    for lr in "${lrs[@]}";do
+      for stream in "${streams[@]}";do
+        variant="$SWEEP_DIR/b${batch}_s${seed}_lr${lr}_stream${stream}"
+        METHOD=tlt_opd_reflex BATCH_SIZE="$batch" SEED="$seed" OPD_FAST_LR="$lr" OPD_UPDATE_STREAM="$stream" \
+          OUTPUT_DIR="$variant" CANONICAL_CONFIG_OUTPUT="$variant/canonical_config.json" bash "$ROOT/run_benchmark.sh" "$@"
+        "${PYTHON_BIN:-python3}" "$ROOT/scripts/check_tlt_opd_pair_config.py" \
+          "$SWEEP_DIR/b${batch}_s${seed}_tlt/canonical_config.json" "$variant/canonical_config.json" --output "$variant/config_diff.json"
+      done
+    done
+    if [[ "${DRY_RUN:-false}" == true ]];then continue;fi
     METHOD=tlt BATCH_SIZE="$batch" SEED="$seed" OUTPUT_DIR="$SWEEP_DIR/b${batch}_s${seed}_tlt" bash "$ROOT/run_benchmark.sh" "$@"
     for lr in "${lrs[@]}";do
       for stream in "${streams[@]}";do

@@ -6,7 +6,7 @@ from pathlib import Path
 import statistics
 import sys
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
-from tlt_reflex.ported.profiles import inspect_draft,active_trials,context_shapes,execution_key,profile_filename
+from tlt_reflex.ported.profiles import inspect_draft,active_trials,context_shapes,execution_key,profile_filename,validate_profile
 from tlt_reflex.profiles import fingerprint
 
 
@@ -75,7 +75,7 @@ def main(argv=None):
     for name,key in groups.items():
         path=Path(a.output) if a.output else Path(a.profile_dir)/name
         if path.exists() and not a.force:
-            if json.loads(path.read_text())['execution_key']!=key:raise ValueError('existing profile key mismatch')
+            validate_profile(json.loads(path.read_text()),key)
             print('Reuse',path);continue
         shapes=[tuple(map(int,s.split('x'))) for s in a.shapes.split(',')]
         slots=list(map(int,a.slots.split(','))) if a.slots else active_trials(key['vocab'],key['topk'])

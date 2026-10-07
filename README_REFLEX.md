@@ -17,7 +17,9 @@ A trained SpecNaacl projector is preferred. Head-basis A is labelled untrained
 and requires `OPD_ALLOW_UNTRAINED_PROJECTOR=1`. Saved A is never overwritten;
 unverified training claims are rejected. Official OPD benchmarks require the
 real-checkpoint SGLang-vs-SpecNaacl representation certificate and zero orphan/
-invalid-context counters. Profiled component runs never rank throughput winners.
+invalid-context counters. Profiled component runs never rank throughput winners. Canonical preflight rejects
+any non-OPD config difference before generation; head-basis and trained-A reports
+remain distinct, with checkpoint/training source recorded.
 
 ```bash
 bash train_qwen25_3b_tlt.sh  # TLT adaptive rollout + fixed EAGLE3

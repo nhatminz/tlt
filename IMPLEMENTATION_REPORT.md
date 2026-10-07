@@ -1,55 +1,53 @@
-# OPD completion report — 2026-10-07
+# Final interface/fairness report — 2026-10-07
 
-Experiment: **TLT adaptive speculative rollout + fixed EAGLE3** vs the same + OPD.
-Spot Trainer is OFF. SpecNaacl was not edited; native TLT semantics remain pinned.
+Scope remains **TLT adaptive speculative rollout + fixed EAGLE3**, with/without
+OPD; Spot Trainer OFF. SpecNaacl is read-only. OPD math/state/CUDA kernels and the
+TLT/SGLang patch were NOT rewritten in this revision.
 
-**Fixed:** feedback now runs after native EOS/stop/length truncation and before
-flattening; terminal continuations are not valid frontier states. Added bounded
-feedback scratch and a single globally normalized chunk update for oversized
-native batches. Auto dispatch retains calibrated sparse/fused/GEMM regions.
-Device B/root versions skip unchanged-root head GEMM. Context/orphan diagnostics
-mask invalid feedback safely and reject invalid comparisons. Cache reclamation
-is ordered on the update stream. Runtime audits prevent reuse of the old verifier
-patch; bootstrap recognizes/backups the previous OPD checkout.
+**Fixed:** run_rl.sh now serializes MAB_CONFIGS as quoted JSON strings: Hydra
+receives `["8_4_32","8_4_16","8_4_8"]`, never numeric underscores. Paths/string
+values and logger lists are also quoted safely. The effective config rejects
+non-string MAB strategies before starting Ray/runtime.
 
-**Files:** tlt_reflex/{state,kernels,dispatch,checkpoint,integration,profiles,parity,
-runtime}.py; the small optional version/deferred-apply hooks in
-ported/opd_reflex_kernels.py; patches/fastrl_reflex.patch and prior-OPD hashes;
-benchmark.py, benchmark_pair.sh, run_benchmark.sh; scripts/{summarize_tlt_opd,
-tune_tlt_opd_proposals,export_specforge_draft,validate_tlt_eagle3_parity,
-upgrade_upstream,bootstrap_upstream,launch_common}; four root launch aliases;
-regression tests and README/run/implementation docs. Base EAGLE3 weights,
-verifier/sampling/RNG, BEG/MAB, GRPO and KV/scheduler algorithms were not rewritten.
+**Benchmark:** pre-generation canonical config dumps use the SAME engine/sampling
+builder as generation. Any non-OPD difference fails. Pair defaults to batches
+1/2/4/8/16/32 and seeds42/43; each case emits tlt/report.json, tlt_opd/report.json,
+comparison.json, summary.csv, config_diff.json and both canonical configs. Grid
+summaries do not double-count responses. Delta AAL/tokens/s/wall/memory and OPD
+section overhead are explicit. Head-basis and trained-A labels/recommendations
+remain separate. Training source checkpoint/dataset/steps are recorded; missing
+trained-A source metadata blocks official comparison instead of being invented.
+No A training occurs during validation or benchmarking.
 
-**Projector:** saved A is preserved/frozen. Only trained or head_basis_initialized
-provenance is accepted. Unknown evidence fails; no random initialization or fake
-learned label. Head-basis A requires OPD_ALLOW_UNTRAINED_PROJECTOR=1 and warns.
-The exported base checkpoint is identical in both modes. Real-checkpoint parity
-is required for official OPD benchmarks; failed/stale/fixture certificates fail.
+**Parity/profile:** real-checkpoint validation now checks head input, raw logits,
+u, corrected logits, Top16 IDs AND probability errors. Old incomplete certificates
+are rejected. Official generation requires a calibrated profile; no hot-path
+autotuning. Offline tuner checks full profile schema/key before reuse. Smoke is
+explicitly scoped separately, so acceptance can run smoke -> parity -> offline
+tune -> official pair. Provenance guards still apply to smoke.
 
-**Actually run:** pytest -q: **104 passed, 2 skipped** (CPU BF16 variants; CUDA BF16
-is tested). Covers native verifier-prefix finish flow, original-source OPD math,
-real CUDA graph/backend/mixed-root-version replay, chunk-vs-single-batch update,
-invalid-context safety, zero-gradient versioning and recorder protocol. Source
-bootstrap/previous-OPD upgrade audits, 14 real Hydra launcher compositions and
-shell syntax checks passed. Tests use Python3.10/Torch2.5.1 cu124/Triton3.1 on RTX3090.
+**Files:** run_rl.sh/rl.py; benchmark.py and pair/sweep runners; scripts/{hydra_value,
+check_tlt_opd_pair_config,summarize_tlt_opd,export_specforge_draft,launch_common,
+validate_tlt_eagle3_parity,tune_tlt_opd_proposals,smoke_tlt_opd};
+tlt_reflex/{benchmark_config,experiments,checkpoint,integration,telemetry,parity};
+tests and README/run docs. Core state.py/kernels.py/ported update math are unchanged.
 
-**Measured components:** synthetic V519 proposal CUDA graphs at batches1/2/4/8/16/32,
-active rows0/16/128/519: sparse/fused/GEMM bitwise parity passed. Synthetic actual
-state allocations at pool512/V32000/H2048/BF16: persistent65.75 MB unchanged;
-scratch754.34 ->160.42 MB when feedback capacity512 ->32; teacher tiles614.4 ->38.4 MB.
-These are component/layout fixtures, not production model peak memory or tokens/s.
+**Actually checked:** compileall passed; bash -n passed for38 scripts;
+pytest -q **111 passed, 2 skipped** (CPU BF16; CUDA BF16 tested). All14 launchers
+passed real pinned Hydra composition with exact list[str] checks. CPU preflight
+ran fair config grids and rejects seed/sampling/checkpoint/graph mismatches;
+CUDA tests retain backend/root/version/chunk/slot/finish correctness coverage.
+Local environment: RTX3090, Python3.10, Torch2.5.1 cu124, Triton3.1.
 
-**Not validated here:** three native smoke attempts and paired benchmark attempt
-all failed the pinned Python3.12/Torch2.8 cu128 environment gate. Real-checkpoint
-parity tool attempt failed because B200 assets are absent; its report is explicitly
-passed=false. No production AAL/throughput, real checkpoint head-input errors or
-B200 speedup is claimed. TP>1, overlap V2, DP attention and quantized/scaled draft
-heads remain unsupported. Oversized chunks and masked head GEMM have FP32/native-
-dtype numerical tolerances, not a universal bitwise trajectory guarantee.
+**GPU acceptance attempts:** all3 native smoke attempts and official pair failed
+the pinned Python3.12/Torch2.8 cu128 environment gate. Real parity and target-GPU
+tuner failed because B200 model/draft/config resources are absent. No production
+parity errors/AAL/tokens/s/peak VRAM were measured, and no speedup is claimed.
+The previous synthetic CUDA/layout measurements remain component evidence only.
+TP>1, DP>1 benchmark telemetry, overlap V2 and quantized/scaled OPD heads remain
+unsupported. External trained-projector/evaluation dataset disjointness must be
+established by the experiment owner; it is not inferred from a filename.
 
-Evidence is in local validation/{pytest_revision.txt,native_revision_attempts.json,
-real_eagle3_revision_unavailable.json,proposal_revision_rtx3090.json,
-memory_revision_fixture.json,previous_opd_upgrade_revision.txt}. These artifacts
-remain ignored by the user's existing .gitignore. [RUN_TLT_OPD.md](RUN_TLT_OPD.md)
-has the exact B200 sequence and projector opt-in/validation commands.
+Evidence: local ignored validation/{pytest_final_interface.txt,
+hydra_final_interface_launchers.json,native_final_interface_attempts.json}.
+B200 sequence/provenance options/output layout: [RUN_TLT_OPD.md](RUN_TLT_OPD.md).

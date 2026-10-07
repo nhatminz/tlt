@@ -66,5 +66,7 @@ prepare_runtime_draft() {
   [[ -e "$DRAFT_CHECKPOINT" ]] || { echo "ERROR: missing pretrained draft: $DRAFT_CHECKPOINT" >&2; exit 2; }
   export_args=(--checkpoint "$DRAFT_CHECKPOINT" --config "$DRAFT_CONFIG" --mapping "$VOCAB_MAPPING" --target "$MODEL" --output "$DRAFT_EXPORT")
   if [[ -n "${OPD_PROJECTOR_PROVENANCE:-}" ]];then export_args+=(--projector-provenance "$OPD_PROJECTOR_PROVENANCE");fi
+  if [[ -n "${OPD_PROJECTOR_TRAINING_DATASET:-}" ]];then export_args+=(--projector-training-dataset "$OPD_PROJECTOR_TRAINING_DATASET");fi
+  if [[ -n "${OPD_PROJECTOR_TRAINING_STEPS:-}" ]];then export_args+=(--projector-training-steps "$OPD_PROJECTOR_TRAINING_STEPS");fi
   "$PYTHON_BIN" "$PROJECT_DIR/scripts/export_specforge_draft.py" "${export_args[@]}"
 }

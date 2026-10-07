@@ -40,7 +40,7 @@ def validate_config(draft,target):
     return cfg
 
 
-def export(checkpoint,config,mapping,target,output,*,projector_provenance=None):
+def export(checkpoint,config,mapping,target,output,*,projector_provenance=None,projector_training_dataset=None,projector_training_steps=None):
     import torch
     from safetensors.torch import load_file,save_file
     checkpoint=Path(checkpoint).resolve(); config=Path(config).resolve()
@@ -142,7 +142,16 @@ def export(checkpoint,config,mapping,target,output,*,projector_provenance=None):
     else:
         if projector_provenance=='trained':raise ValueError('cannot mark a missing projector as trained')
         trained=False;provenance='head_basis_initialized'
+    training_metadata=dict(metadata.get('opd_projector_training_metadata',dc.get('opd_projector_training_metadata',{})) or {})
+    dataset=projector_training_dataset or metadata.get('training_dataset') or metadata.get('dataset_path')
+    steps=projector_training_steps
+    if steps is None:steps=metadata.get('training_steps',payload.get('draft_step') if isinstance(payload,dict) else None)
+    if dataset is not None:training_metadata['dataset']=str(dataset)
+    if steps is not None:
+        if isinstance(steps,bool) or int(steps)<0:raise ValueError('invalid projector training step count')
+        training_metadata['steps']=int(steps)
     cfg.update(opd_rank=rank,opd_projector_provenance=provenance,opd_projector_trained=trained)
+    if training_metadata:cfg['opd_projector_training_metadata']=training_metadata
     # Original SGLang loader accepts model.* midlayer/fc/norm plus lm_head.
     converted={('model.'+name if name not in ('lm_head.weight','d2t','t2d') else name):value.contiguous()
                for name,value in cleaned.items() if name not in ('d2t','t2d')}
@@ -153,6 +162,7 @@ def export(checkpoint,config,mapping,target,output,*,projector_provenance=None):
         target_embedding_source='runtime target checkpoint; upstream set_embed',
         vocab_mapping_rebuilt=False,opd_rank=rank,opd_projector_provenance=provenance,
         opd_projector_trained=trained,opd_projector_sha256=hashlib.sha256(projector.numpy().tobytes()).hexdigest())
+    if training_metadata:manifest['opd_projector_training_metadata']=training_metadata
     if projector_sidecar is not None:manifest['sha256'][str(projector_sidecar)]=sha(projector_sidecar)
     output=Path(output)
     if output.exists():

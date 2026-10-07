@@ -142,7 +142,7 @@ def test_projector_provenance_gate_requires_explicit_untrained_opt_in():
 def test_representation_validation_rejects_wrong_head_inputs_even_if_logits_match():
     from tlt_reflex.parity import compare_payloads
     payload=dict(head_input=torch.randn(1,12),raw_logits=torch.randn(1,37),u=torch.randn(1,8),
-        top16_ids=torch.arange(16)[None],top16_probs=torch.ones(1,16)/37,projector=torch.randn(12,8))
+        corrected_logits=torch.randn(1,37),top16_ids=torch.arange(16)[None],top16_probs=torch.ones(1,16)/37,projector=torch.randn(12,8))
     assert compare_payloads(payload,payload)['passed']
     wrong=dict(payload,head_input=payload['head_input']*3)
     assert not compare_payloads(payload,wrong)['passed']

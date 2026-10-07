@@ -17,6 +17,7 @@ def parse(argv=None):
     p.add_argument('--allow-untrained-projector',action='store_true')
     p.add_argument('--head-atol',type=float,default=.02);p.add_argument('--logits-atol',type=float,default=.05)
     p.add_argument('--u-atol',type=float,default=.02);p.add_argument('--min-top16-agreement',type=float,default=1.)
+    p.add_argument('--corrected-atol',type=float,default=.05);p.add_argument('--probability-atol',type=float,default=2e-4)
     p.add_argument('--force',action='store_true');p.add_argument('--stage',choices=['native','source']);p.add_argument('--packet')
     return p.parse_args(argv)
 
@@ -24,7 +25,7 @@ def parse(argv=None):
 def stage_native(a):
     from tlt_reflex.runtime import configure,require_runtime
     os.environ['OPD_EAGLE3_PARITY_CAPTURE']=a.packet
-    os.environ['OPD_FAST_LR']='0';os.environ['OPD_PROFILE']='0';os.environ['OPD_PROPOSAL_MODE']='fused'
+    os.environ['OPD_REQUIRE_CALIBRATED_PROFILE']='0';os.environ['OPD_FAST_LR']='0';os.environ['OPD_PROFILE']='0';os.environ['OPD_PROPOSAL_MODE']='fused'
     os.environ['OPD_ALLOW_UNTRAINED_PROJECTOR']='1' if a.allow_untrained_projector else '0'
     os.environ.pop('OPD_PROPOSAL_PROFILE',None);configure('tlt_opd_reflex');sg=require_runtime()
     from transformers import AutoTokenizer
@@ -76,7 +77,8 @@ def stage_source(a):
         for token in active.cpu().tolist():bits[token//32]|=torch.tensor(1<<(token%32),dtype=torch.int64).to(torch.int32)
         opd.bitmap.copy_(bits)
         q,ids,_=opd.propose(raw[:,None],head[:,None],16,mapping,head_inputs=head[:,None])
-        payload=dict(head_input=head.cpu(),raw_logits=raw.cpu(),u=opd.u_cache[:,0].cpu(),top16_ids=ids[:,0].cpu(),top16_probs=q[:,0].cpu(),projector=adapter.opd_projector.cpu())
+        from tlt_reflex.parity import corrected_logits
+        payload=dict(corrected_logits=corrected_logits(raw,opd.u_cache[:,0],opd.B_fast).cpu(),B=packet['B'],head_input=head.cpu(),raw_logits=raw.cpu(),u=opd.u_cache[:,0].cpu(),top16_ids=ids[:,0].cpu(),top16_probs=q[:,0].cpu(),projector=adapter.opd_projector.cpu())
         torch.save(payload,str(Path(a.packet).with_suffix('.source.pt')))
 
 
@@ -108,9 +110,9 @@ def main(argv=None):
             subprocess.run([a.source_python,str(Path(__file__).resolve()),*args,'--stage','source','--packet',packet],env=env,check=True)
             import torch
             native=torch.load(packet,map_location='cpu',weights_only=True);source=torch.load(str(Path(packet).with_suffix('.source.pt')),map_location='cpu',weights_only=True)
-            payload.update(compare_payloads(native,source,head_atol=a.head_atol,logits_atol=a.logits_atol,u_atol=a.u_atol,min_top16_agreement=a.min_top16_agreement))
+            payload.update(compare_payloads(native,source,head_atol=a.head_atol,logits_atol=a.logits_atol,u_atol=a.u_atol,corrected_atol=a.corrected_atol,probability_atol=a.probability_atol,min_top16_agreement=a.min_top16_agreement))
             payload['projector_provenance']=native['projector_provenance']
-            payload['tolerances']=dict(head=a.head_atol,logits=a.logits_atol,u=a.u_atol,top16_agreement=a.min_top16_agreement)
+            payload['tolerances']=dict(head=a.head_atol,logits=a.logits_atol,u=a.u_atol,corrected_logits=a.corrected_atol,top16_probability=a.probability_atol,top16_agreement=a.min_top16_agreement)
     except Exception as exc:
         payload['error']=f'{type(exc).__name__}: {exc}'
         report.write_text(json.dumps(payload,indent=2)+'\n');raise

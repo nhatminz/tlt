@@ -54,6 +54,8 @@ def make_reflex(worker,embed):
     from tlt_reflex.checkpoint import require_projector_provenance
     require_projector_provenance(provenance,allow_untrained=os.environ.get('OPD_ALLOW_UNTRAINED_PROJECTOR','0')=='1')
     profile,profile_path=discover(v,rank,model.lm_head.weight.dtype,min(v,topk),embed.device)
+    if profile is None and os.environ.get('OPD_REQUIRE_CALIBRATED_PROFILE','0')=='1':
+        raise ValueError('official OPD benchmark requires a compatible proposal profile; tune offline with scripts/tune_tlt_opd_proposals.sh before generation')
     mode=os.environ.get('OPD_PROPOSAL_MODE','auto')
     dense=os.environ.get('OPD_DENSE_IMPLEMENTATION','auto')
     if mode=='dense':mode='gemm' if dense=='gemm' else 'fused'
@@ -73,6 +75,11 @@ def make_reflex(worker,embed):
     if capture:
         from tlt_reflex.parity import install_native_recorder
         install_native_recorder(model,state,capture)
+    if worker._tlt_meter is not None:
+        payload=json.loads(Path(profile_path).read_text()) if profile_path else {}
+        worker._tlt_meter.opd_proposal_profile=dict(path=profile_path or None,calibrated=profile is not None,
+            execution_key=payload.get('execution_key'),
+            selection_policy='measured sparse/fused/GEMM cost interpolation',generation_autotuning=False)
     worker.req_to_token_pool._tlt_reflex=state
     print(f'TLT OPD: rank={rank} TopK={state.topk} contexts={contexts} A={provenance}/frozen; profile={profile_path or "uncalibrated fallback"}',flush=True)
     return state

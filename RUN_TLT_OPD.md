@@ -83,13 +83,13 @@ bash scripts/validate_tlt_eagle3_parity.sh
 The tool runs native SGLang EAGLE3 on the real checkpoint, records actual prefill
 inputs/head operand/raw logits, shuts down that engine, and replays the same
 inputs in SpecNaacl's separate Python environment. It compares exact head input,
-raw compact logits, real OPD u and corrected Top16 with the same nonzero B fixture.
+raw compact logits, real OPD u, corrected logits and corrected Top16 IDs/probabilities with the same nonzero B fixture.
 No extra transformer forward is injected into the native observation. This is an
 offline diagnostic and is forbidden inside a throughput benchmark.
 
 Report: max_abs_head_input_error, max_abs_logits_error, max_abs_u_error,
 top16_agreement, probability error, explicit tolerances and passed flag. Defaults:
-head0.02, logits0.05, u0.02, position-wise Top16 agreement1.0. A failed/missing
+head0.02, raw/corrected logits0.05, u0.02, probabilities0.0002, position-wise Top16 agreement1.0. A failed/missing
 validation blocks OPD benchmarking. The certificate checks exact artifact hashes,
 implementation/runtime/GPU and the read-only SpecNaacl source hashes. It cannot
 be reused after changing weights, A or the representation implementation.
@@ -101,15 +101,37 @@ missing dependency/checkpoint cannot produce a passing production certificate.
 Both target and source draft resources must exist on B200. The tool currently
 requires target safetensors, TP1, one fresh prefill and the checked EAGLE3 variants.
 
+## Trained projector source record
+
+When exporting a trained projector, record its actual training source (do not
+invent missing values):
+
+```bash
+export OPD_PROJECTOR_TRAINING_DATASET="/path/to/training-only-dataset-or-split"
+export OPD_PROJECTOR_TRAINING_STEPS=20   # actual source optimizer steps
+export DRAFT_EXPORT="$PWD/outputs/draft_exports_opd/<new-export-name>"
+```
+
+Metadata is preserved from the checkpoint if present; these overrides fill old
+formats. An official trained-A benchmark requires dataset/step information.
+Both modes use the SAME trained EAGLE3 base export. Choose held-out evaluation
+prompts; this tool never trains A or verifies disjointness of an external run.
+Reports keep `TLT`, `TLT + OPD(head-basis A + online B)` and
+`TLT + OPD(trained A + online B)` separate. Mixed projector experiments never
+produce a single winner.
+
 ## Native smoke and paired benchmark
 
 ```bash
-# TLT, OPD LR=0, OPD LR=.01; each in a new engine.
+# Acceptance order: native smoke -> real parity -> GPU tuning -> official pair.
+# Smoke does not need a parity certificate/profile, but provenance guards apply.
 bash scripts/smoke_tlt_opd.sh
+bash scripts/validate_tlt_eagle3_parity.sh
+bash scripts/tune_tlt_opd_proposals.sh
 
 # One LR/stream, multiple seeds and actual request batches1..32.
 BENCH_SEEDS=42,43 BENCH_BATCH_SIZES=1,2,4,8,16,32 \
-OPD_FAST_LRS=0.01 OPD_STREAMS=1 RESPONSES_PER_PROMPT=1 \
+OPD_FAST_LR=0.01 OPD_UPDATE_STREAM=1 RESPONSES_PER_PROMPT=1 \
 BENCHMARK_PROMPTS=64 MAX_NEW_TOKENS=2048 MAX_PROMPT_LENGTH=256 \
 bash benchmark_tlt_opd_pair.sh
 
@@ -120,9 +142,11 @@ BENCHMARK_PROMPTS=64 MAX_NEW_TOKENS=2048 MAX_PROMPT_LENGTH=256 \
 bash sweep_tlt_opd_reflex.sh
 ```
 
-run_benchmark.sh automatically checks/generates the representation certificate
-for OPD if needed. Pair runs TLT and OPD sequentially and emits both reports plus
-deltas; sweep emits report.json, summary.csv, responses.jsonl, fastest_observed.env.
+Official run_benchmark.sh checks/generates the representation certificate for OPD.
+Native smoke uses `--smoke`/BENCH_SMOKE=1 and is explicitly excluded from official
+comparison, allowing smoke before real parity and offline tuning. Pair dumps canonical configs for both modes and checks them BEFORE any engine runs.
+Only differences under `opd.*` are accepted. It then runs TLT and OPD sequentially
+and emits both reports plus deltas; sweep emits report.json, summary.csv, responses.jsonl, fastest_observed.env.
 Identity validation compares weights, actual tokenized prompts, measured samples,
 seed/sampling, every TLT/MAB setting, batch, warmup and graphs. Profiling runs,
 orphan nodes or invalid contexts cannot be recommended. An observed candidate
@@ -146,7 +170,8 @@ Reuse your checked profile from SpecNaacl; no need to tune on benchmark prompts.
 Auto follows the source cost interpolation/argmin over sparse/fused/GEMM, using
 device active_count without host reads. Native TLT graph profiles take priority.
 A source profile remains a calibration prior: wrapper/compiler differences may
-change actual costs. A missing compatible profile prints an uncalibrated fallback.
+change actual costs. A missing compatible profile permits only an explicitly scoped smoke/training
+fallback. Official OPD throughput runs FAIL and require an offline profile first.
 Explicit incompatible profiles fail. Native offline tuner:
 
 ```bash
@@ -190,3 +215,18 @@ native FastRL GRPO with fixed pretrained EAGLE3, target LR1e-5, responses8, shar
 sampling/data config. They do not fake EAGLE3 Spot Trainer. OPD_TRAIN_PROJECTOR=1
 fails. Output remains outputs/rl/<model>_<method>_<timestamp>/. TP>1, overlap V2,
 DP attention and quantized/scaled draft heads remain explicitly unsupported in OPD.
+
+
+Canonical/output layout for the grid pair (defaults: batches1/2/4/8/16/32,
+seeds42/43): each `b<batch>_s<seed>/` contains `tlt/report.json`,
+`tlt_opd/report.json`, both `canonical_config.json` files, `comparison.json`,
+`summary.csv`, `config_diff.json`. The grid root also contains mode summaries,
+comparison/summary/config-diff and responses; aggregate responses are not counted
+twice. Differences report only OPD keys. Deltas include verified AAL, tokens/s,
+wall time and allocated/reserved memory, alongside OPD overhead (null when
+throughput profiling is OFF). For a configuration-only audit without GPU/assets:
+
+```bash
+DRY_RUN=true BENCH_BATCH_SIZES=1,2 BENCH_SEEDS=42,43 \
+bash benchmark_tlt_opd_pair.sh
+```

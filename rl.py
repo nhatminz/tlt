@@ -23,6 +23,8 @@ def main():
     configure(args.method)
     cfg=compose_config(overrides)
     validate_spot_trainer(cfg)  # validate effective Hydra booleans, not text spelling
+    if any(not isinstance(value,str) for value in cfg.speculative.eagle.mab_configs):
+        raise ValueError('speculative.eagle.mab_configs must be list[str]; quote each strategy inside the Hydra list')
     if args.validate_config:
         # Compose the REAL upstream schema, without importing Ray/CUDA/models.
         from omegaconf import OmegaConf

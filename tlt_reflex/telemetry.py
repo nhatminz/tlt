@@ -42,7 +42,7 @@ class Meter:
         opd=getattr(self,"opd",None)
         opd_report=opd.report() if opd is not None else {}
         self.counters.update({k:v for k,v in opd_report.items() if isinstance(v,(int,float)) and not isinstance(v,bool)})
-        return dict(opd_metadata=opd_report,times_ms=self.totals.copy(),counters=self.counters.copy(),
+        return dict(opd_proposal_profile=getattr(self,'opd_proposal_profile',None),opd_metadata=opd_report,times_ms=self.totals.copy(),counters=self.counters.copy(),
                     reflex_state_memory_mb=self.reflex_state_memory_mb,
                     reflex_buffer_memory_mb=self.reflex_buffer_memory_mb,
                     profile_enabled=self.enabled,graph_inner_times_available=False,
