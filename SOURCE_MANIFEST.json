@@ -267,14 +267,6 @@
       "port_status": "exact"
     },
     {
-      "source": "SpecNaacl/.python-version",
-      "destination": ".python-version",
-      "snapshot": "sources/SpecNaacl/.python-version",
-      "sha256": "7b55f8e67b5623c4bef3fa691288da9437d79d3aba156de48d481db32ac7d16d",
-      "port_sha256": "7b55f8e67b5623c4bef3fa691288da9437d79d3aba156de48d481db32ac7d16d",
-      "port_status": "exact"
-    },
-    {
       "source": "SpecNaacl/scripts/check_training_sources.py",
       "destination": "scripts/check_training_sources.py",
       "snapshot": "sources/SpecNaacl/scripts/check_training_sources.py",
