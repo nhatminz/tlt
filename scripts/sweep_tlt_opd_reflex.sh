@@ -1,39 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SWEEP_DIR="${SWEEP_DIR:-$ROOT/outputs/benchmarks/tlt_opd_${MODEL_KEY:-qwen25_3b}_$(date -u +%Y%m%dT%H%M%S_%N)}"
-[[ ! -e "$SWEEP_DIR" ]] || { echo 'ERROR: choose new SWEEP_DIR' >&2;exit 2; }
-IFS=, read -ra batches <<< "${BENCH_BATCH_SIZES:-1,2,4,8,16,32}"
-IFS=, read -ra seeds <<< "${BENCH_SEEDS:-42,43}"
-IFS=, read -ra lrs <<< "${OPD_FAST_LRS:-0.001,0.01,0.05,0.1}"
-IFS=, read -ra streams <<< "${OPD_STREAMS:-0,1}"
-export OPD_PROFILE=0
-export RESPONSES_PER_PROMPT="${RESPONSES_PER_PROMPT:-1}"
-export BENCHMARK_PROMPTS="${BENCHMARK_PROMPTS:-64}"
-for batch in "${batches[@]}";do
-  for seed in "${seeds[@]}";do
-    # Preflight every variant before the baseline starts; only OPD knobs differ.
-    METHOD=tlt BATCH_SIZE="$batch" SEED="$seed" OUTPUT_DIR="$SWEEP_DIR/b${batch}_s${seed}_tlt" \
-      CANONICAL_CONFIG_OUTPUT="$SWEEP_DIR/b${batch}_s${seed}_tlt/canonical_config.json" bash "$ROOT/run_benchmark.sh" "$@"
-    for lr in "${lrs[@]}";do
-      for stream in "${streams[@]}";do
-        variant="$SWEEP_DIR/b${batch}_s${seed}_lr${lr}_stream${stream}"
-        METHOD=tlt_opd_reflex BATCH_SIZE="$batch" SEED="$seed" OPD_FAST_LR="$lr" OPD_UPDATE_STREAM="$stream" \
-          OUTPUT_DIR="$variant" CANONICAL_CONFIG_OUTPUT="$variant/canonical_config.json" bash "$ROOT/run_benchmark.sh" "$@"
-        "${PYTHON_BIN:-python3}" "$ROOT/scripts/check_tlt_opd_pair_config.py" \
-          "$SWEEP_DIR/b${batch}_s${seed}_tlt/canonical_config.json" "$variant/canonical_config.json" --output "$variant/config_diff.json"
-      done
-    done
-    if [[ "${DRY_RUN:-false}" == true ]];then continue;fi
-    METHOD=tlt BATCH_SIZE="$batch" SEED="$seed" OUTPUT_DIR="$SWEEP_DIR/b${batch}_s${seed}_tlt" bash "$ROOT/run_benchmark.sh" "$@"
-    for lr in "${lrs[@]}";do
-      for stream in "${streams[@]}";do
-        METHOD=tlt_opd_reflex BATCH_SIZE="$batch" SEED="$seed" OPD_FAST_LR="$lr" OPD_UPDATE_STREAM="$stream" \
-          OUTPUT_DIR="$SWEEP_DIR/b${batch}_s${seed}_lr${lr}_stream${stream}" bash "$ROOT/run_benchmark.sh" "$@"
-      done
-    done
-  done
-done
-if [[ "${DRY_RUN:-false}" != true ]];then
-  "${PYTHON_BIN:-python3}" "$ROOT/scripts/summarize_tlt_opd.py" "$SWEEP_DIR"
-fi
+export MODEL_KEY="${MODEL_KEY:-qwen25_3b}"
+export METHOD="${METHOD:-tlt_opd_reflex}"
+source "$ROOT/configs/_shared/b200_common.env"
+source "$ROOT/configs/$MODEL_KEY/b200.env"
+case "${DATASET,,}" in
+ simplelr|simplelr_abel_level3to5) DATASET_PATH="${DATASET_PATH:-$DATA_ROOT/simplelr_abel_level3to5/train.parquet}" ;;
+ gsm8k) DATASET_PATH="${DATASET_PATH:-$DATA_ROOT/gsm8k/main/train-00000-of-00001.parquet}" ;;
+ dapo) DATASET_PATH="${DATASET_PATH:-$DATA_ROOT/DAPO-Math-17k-Processed/en/train-00000-of-00001.parquet}" ;;
+ *) : "${DATASET_PATH:?set existing DATASET_PATH}" ;;
+esac
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+DRAFT_CHECKPOINT="${DRAFT_CHECKPOINT:-$ROOT/../SpecNaacl/outputs/pretrain/$MODEL_KEY/latest_checkpoint}"
+BENCH_OUTPUT="${BENCH_OUTPUT:-$ROOT/outputs/benchmarks/tlt_${MODEL_KEY}_$(date -u +%Y%m%dT%H%M%S_%N)}"
+export OPD_PROPOSAL_PROFILE_DIR="${OPD_PROPOSAL_PROFILE_DIR:-$ROOT/outputs/benchmarks/opd_proposals}"
+cmd=("$PYTHON_BIN" "$ROOT/scripts/benchmark_tlt_opd.py"
+ --method "${BENCH_METHOD:-pair}" --target-model "$MODEL" --target-adapter "$TARGET_ADAPTER"
+ --draft-checkpoint "$DRAFT_CHECKPOINT" --dataset-path "$DATASET_PATH" --output "$BENCH_OUTPUT"
+ --batch-sizes "${BENCH_BATCH_SIZES:-$BATCH_SIZE}" --responses "$RESPONSES_PER_PROMPT"
+ --seeds "${BENCH_SEEDS:-42,43}" --iterations "${BENCH_ITERATIONS:-2}" --warmup "${BENCH_WARMUP:-1}"
+ --max-length "${BENCH_MAX_LENGTH:-512}" --max-prompt-length "${BENCH_MAX_PROMPT_LENGTH:-256}"
+ --temperature "$TEMPERATURE" --top-p "$TOP_P" --top-k "${TOP_K:-0}"
+ --attn-implementation "$ATTENTION_IMPLEMENTATION" --dtype "$MODEL_DTYPE"
+ --rank "$OPD_RANK" --topk "$OPD_TOPK" --fast-lrs "${OPD_FAST_LRS:-$OPD_FAST_LR}" --streams "${OPD_STREAMS:-$OPD_UPDATE_STREAM}"
+ --visited-weight "$OPD_VISITED_WEIGHT" --frontier-weight "$OPD_FRONTIER_WEIGHT"
+ --draft-lr "$DRAFT_LR" --draft-accumulation-steps "$DRAFT_ACCUMULATION_STEPS")
+if [[ "${BENCH_ONLINE_DRAFT:-0}" == 1 ]];then cmd+=(--online-draft);fi
+cmd+=("$@")
+printf 'Output: %s\nCommand:' "$BENCH_OUTPUT";printf ' %q' "${cmd[@]}";printf '\n'
+if [[ "${DRY_RUN:-false}" == true ]];then cmd+=(--dry-run);fi
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+exec "${cmd[@]}"

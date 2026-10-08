@@ -1,0 +1,257 @@
+# TLT adaptive speculative rollout + fixed EAGLE3, with/without OPD
+
+Only TltReflex is changed. Both modes retain native scheduler/KV/tree/verifier,
+RNG and BEG/MAB at `bce3df7a4d46473912e9b81bf47bca419729557f`. Spot Trainer is
+OFF; A is frozen and B adapts online. This is not full Spot-Trainer TLT.
+
+## B200 setup
+
+```bash
+cd /workspace/storage-shared/nlp/minhpn19/TltReflex
+source .venv/bin/activate                    # separate TLT Python3.12 / Torch2.8 cu128
+export PYTHON_BIN="$(command -v python)"
+export CUDA_VISIBLE_DEVICES=0
+export SOURCE_SPECNAACL_ROOT="$(cd ../SpecNaacl && pwd)"
+export SPECNAACL_PYTHON_BIN="$SOURCE_SPECNAACL_ROOT/.venv/bin/python"
+export MODEL_KEY=qwen25_3b
+export OPD_RANK=8 OPD_TOPK=16 OPD_FAST_LR=0.01 OPD_UPDATE_STREAM=1
+export OPD_TRAIN_PROJECTOR=0 OPD_PROFILE=0 OPD_DEBUG=0
+export OPD_MAX_SPECULATIVE_BATCH_SIZE=32
+export OPD_PROPOSAL_MODE=auto
+export OPD_PROPOSAL_PROFILE_DIR="$PWD/outputs/benchmarks/opd_proposals"
+unset OPD_PROPOSAL_PROFILE OPD_TUNE_OUTPUT
+
+bash scripts/bootstrap_upstream.sh
+"$PYTHON_BIN" scripts/validate_environment.py --rl
+"$PYTHON_BIN" -m pytest -q
+```
+
+Bootstrap recognizes the previous OPD patch or legacy Fast-LK checkout by exact
+hashes, saves it as a backup, fetches/checks the pin and applies the current patch.
+It prefers `artifacts/fastrl-bce3df7.bundle` if present; otherwise fetches official
+Git. `FASTRL_GIT_SOURCE=/path/to/bundle` supports offline machines. Unknown local
+upstream changes are preserved and rejected. Runtime also audits patch identity,
+so copying new plugin code while retaining an old verifier patch cannot silently
+run the pre-truncation feedback bug.
+
+Default paths match SpecNaacl:
+
+- Target `/workspace/storage-shared/models/Qwen2.5-3B-Instruct`.
+- Data `/workspace/storage-shared/nlp/minhpn19/data/simplelr_abel_level3to5/train.parquet`.
+- Draft `$SOURCE_SPECNAACL_ROOT/outputs/pretrain/qwen25_3b/latest_checkpoint`.
+- Config `.../latest_draft_config.json`, mapping `.../latest_vocab_mapping.pt`.
+- Common exported runtime checkpoint `outputs/draft_exports_opd/qwen25_3b`.
+
+All 14 model wrappers remain. `MODEL`, `DATASET_PATH`, `DRAFT_CHECKPOINT`,
+`DRAFT_CONFIG`, `VOCAB_MAPPING`, `DRAFT_EXPORT` can override paths. Use a NEW export
+path when changing source weights/provenance; both modes use this same export.
+Do not reinstall or modify SpecNaacl's environment to make SGLang import there.
+
+## Projector provenance
+
+Official comparison should use a SpecNaacl checkpoint whose A was actually trained
+at the draft optimizer boundary. Export preserves existing A exactly and never
+initializes over it. `trained` and `head_basis_initialized` are the only accepted
+provenances. An arbitrary saved tensor without training/init evidence is rejected.
+A generic old string saying "learned at optimizer boundary" is not sufficient
+proof that the optimizer really updated A.
+
+For a confirmed trained checkpoint, override DRAFT_CHECKPOINT to that file/dir.
+If its old format lacks explicit provenance, an author-confirmed declaration can
+be supplied with `OPD_PROJECTOR_PROVENANCE=trained` (exporter option
+`--projector-provenance trained`). Do this only with actual training evidence.
+The declaration does not train A. Config/mapping remain the ones matching those
+base EAGLE3 weights; baseline and OPD still use the identical exported checkpoint.
+
+If you deliberately test the default pretrain checkpoint without trained A:
+
+```bash
+export OPD_ALLOW_UNTRAINED_PROJECTOR=1
+```
+
+This opts into head-basis A explicitly and prints a warning. The report continues
+to label A untrained. Without this opt-in, OPD fails rather than presenting an
+untrained projector as a learned one. Baseline TLT ignores A/B at runtime.
+
+## Real EAGLE3 representation validation
+
+```bash
+export OPD_EAGLE3_PARITY_REPORT="$PWD/outputs/validation/eagle3_${MODEL_KEY}.json"
+bash scripts/validate_tlt_eagle3_parity.sh
+```
+
+The tool runs native SGLang EAGLE3 on the real checkpoint, records actual prefill
+inputs/head operand/raw logits, shuts down that engine, and replays the same
+inputs in SpecNaacl's separate Python environment. It compares exact head input,
+raw compact logits, real OPD u, corrected logits and corrected Top16 IDs/probabilities with the same nonzero B fixture.
+No extra transformer forward is injected into the native observation. This is an
+offline diagnostic and is forbidden inside a throughput benchmark.
+
+Report: max_abs_head_input_error, max_abs_logits_error, max_abs_u_error,
+top16_agreement, probability error, explicit tolerances and passed flag. Defaults:
+head0.02, raw/corrected logits0.05, u0.02, probabilities0.0002, position-wise Top16 agreement1.0. A failed/missing
+validation blocks OPD benchmarking. The certificate checks exact artifact hashes,
+implementation/runtime/GPU and the read-only SpecNaacl source hashes. It cannot
+be reused after changing weights, A or the representation implementation.
+`--force` reruns validation. A cached valid report avoids repeating model loads.
+
+The default source interpreter is `../SpecNaacl/.venv/bin/python`; set
+SPECNAACL_PYTHON_BIN if that environment has another name. A tiny fixture or a
+missing dependency/checkpoint cannot produce a passing production certificate.
+Both target and source draft resources must exist on B200. The tool currently
+requires target safetensors, TP1, one fresh prefill and the checked EAGLE3 variants.
+
+## Trained projector source record
+
+When exporting a trained projector, record its actual training source (do not
+invent missing values):
+
+```bash
+export OPD_PROJECTOR_TRAINING_DATASET="/path/to/training-only-dataset-or-split"
+export OPD_PROJECTOR_TRAINING_STEPS=20   # actual source optimizer steps
+export DRAFT_EXPORT="$PWD/outputs/draft_exports_opd/<new-export-name>"
+```
+
+Metadata is preserved from the checkpoint if present; these overrides fill old
+formats. An official trained-A benchmark requires dataset/step information.
+Both modes use the SAME trained EAGLE3 base export. Choose held-out evaluation
+prompts; this tool never trains A or verifies disjointness of an external run.
+Reports keep `TLT`, `TLT + OPD(head-basis A + online B)` and
+`TLT + OPD(trained A + online B)` separate. Mixed projector experiments never
+produce a single winner.
+
+## Native smoke and paired benchmark
+
+```bash
+# Acceptance order: GPU tuning/profile validation -> native smoke -> real parity -> official pair.
+# Smoke does not need a parity certificate/profile, but provenance guards apply.
+bash scripts/tune_tlt_opd_proposals.sh
+bash scripts/smoke_tlt_opd.sh
+bash scripts/validate_tlt_eagle3_parity.sh
+
+# One LR/stream, multiple seeds and actual request batches1..32.
+BENCH_SEEDS=42,43 BENCH_BATCH_SIZES=1,2,4,8,16,32 \
+OPD_FAST_LR=0.01 OPD_UPDATE_STREAM=1 RESPONSES_PER_PROMPT=1 \
+BENCHMARK_PROMPTS=64 MAX_NEW_TOKENS=2048 MAX_PROMPT_LENGTH=256 \
+bash benchmark_tlt_opd_pair.sh
+
+# Full sweep, same TLT config at each batch/seed.
+OPD_FAST_LRS=0.001,0.01,0.05,0.1 OPD_STREAMS=0,1 BENCH_SEEDS=42,43 \
+BENCH_BATCH_SIZES=1,2,4,8,16,32 RESPONSES_PER_PROMPT=1 \
+BENCHMARK_PROMPTS=64 MAX_NEW_TOKENS=2048 MAX_PROMPT_LENGTH=256 \
+bash sweep_tlt_opd_reflex.sh
+```
+
+Official run_benchmark.sh checks/generates the representation certificate for OPD.
+Native smoke uses `--smoke`/BENCH_SMOKE=1 and is explicitly excluded from official
+comparison, allowing smoke before real parity and offline tuning. Pair dumps canonical configs for both modes and checks them BEFORE any engine runs.
+Only differences under `opd.*` are accepted. It then runs TLT and OPD sequentially
+and emits both reports plus deltas; sweep emits report.json, summary.csv, responses.jsonl, fastest_observed.env.
+Identity validation compares weights, actual tokenized prompts, measured samples,
+seed/sampling, every TLT/MAB setting, batch, warmup and graphs. Profiling runs,
+orphan nodes or invalid contexts cannot be recommended. An observed candidate
+requires **verified AAL higher AND tokens/s strictly higher** than its matched
+baseline. This does not establish statistical significance or guarantee wins on
+new data/seeds. No end-to-end result for this implementation has been measured here.
+
+BATCH_SIZE counts prompts; requests = BATCH_SIZE*RESPONSES_PER_PROMPT. Default
+sweep responses1 realizes batches1/2/4/8/16/32; training responses8 matches
+SpecNaacl. Native threshold32 is retained. Upstream can remain spec-enabled above
+that threshold, so the plugin handles oversized batches through bounded chunks:
+all chunks read frozen B_t, accumulate weighted gradients/weight, then apply B once.
+No denominator per chunk or sequential adaptation is used. OPD_MAX_SPECULATIVE_BATCH_SIZE
+controls feedback scratch capacity, not the scheduler or native tree. Raising it
+reduces chunk overhead at the cost of memory. Persistent slot caches retain the
+full pool. Logs/report distinguish persistent and scratch MB.
+
+## Proposal profiles and separate profiling
+
+Official TLT+OPD uses **only TLT-native calibration** from this GPU/server.
+SpecNaacl profiles and old contiguous-ID profiles are rejected. Unset any previous
+explicit source profile and tune again:
+
+```bash
+unset OPD_PROPOSAL_PROFILE OPD_TUNE_OUTPUT
+export OPD_PROPOSAL_PROFILE_DIR="$PWD/outputs/benchmarks/opd_proposals"
+export OPD_TUNE_SEED=42
+bash scripts/tune_tlt_opd_proposals.sh
+```
+
+The tuner canonicalizes `(batch, contexts_per_request)` into `(batch*contexts,1)`
+and deduplicates effective contexts before benchmarking. Defaults produce exactly
+`[1,2,4,8,16,32,128]`; 32x1 and 8x4 share one bucket. Active rows use a seeded
+sorted randperm, not a contiguous prefix. Scattered IDs, B rows and bitmap agree.
+All sparse/fused/GEMM outputs must have bitwise parity. The profile is validated
+by ProposalProfile and the native consumer before an atomic write; failure never
+publishes a partial/invalid profile.
+
+Keys include GPU/CC, compact V/r/dtype/TopK, Torch/Triton/CUDA, kernel hash,
+TLT execution fingerprint and scattered-calibration version. An old profile cannot
+match the new execution key. Official runs with OPD_REQUIRE_CALIBRATED_PROFILE=1
+fail clearly when a matching native profile is absent; generation never tunes.
+Development smoke/training with requirement0 can use an uncalibrated fallback,
+but cannot reuse a SpecNaacl profile through this loader.
+
+Verify the real draft/GPU key and reload the profile:
+
+```bash
+"$PYTHON_BIN" scripts/validate_tlt_opd_profile.py \
+  --draft-config "$SOURCE_SPECNAACL_ROOT/outputs/pretrain/$MODEL_KEY/latest_draft_config.json" \
+  --draft-checkpoint "$SOURCE_SPECNAACL_ROOT/outputs/pretrain/$MODEL_KEY/latest_checkpoint" \
+  --vocab-mapping "$SOURCE_SPECNAACL_ROOT/outputs/pretrain/$MODEL_KEY/latest_vocab_mapping.pt" \
+  --rank "$OPD_RANK" --dtype bf16 --topk "$OPD_TOPK" \
+  --profile-dir "$OPD_PROPOSAL_PROFILE_DIR"
+```
+
+If using a different trained checkpoint/config/mapping, pass those same paths to
+both tuner/validator (DRAFT_CHECKPOINT/DRAFT_CONFIG/VOCAB_MAPPING overrides).
+Auto keeps the existing device cost interpolation/argmin over all three backends.
+Root versions, persistent caches, bounded scratch and OPD objective are unchanged.
+
+Pair order is counterbalanced by the **effective canonical sampling seed**:
+42/44 run TLT then OPD, 43/45 run OPD then TLT. Every case records run_order.json,
+and measured reports record physical run positions. This changes execution order
+only; both modes retain identical prompts/order/seed/weights/sampling/TLT/MAB,
+graphs, warmup and measured requests. Component runs use the same balanced order.
+
+```bash
+COMPONENT_PROFILE=1 BATCH_SIZE=8 RESPONSES_PER_PROMPT=1 \
+BENCHMARK_PROMPTS=16 MAX_NEW_TOKENS=512 bash benchmark_pair.sh
+```
+
+Throughput remains profile OFF. Eager component runs live in separate directories
+and do not participate in comparison. Graph-inner event times are unavailable,
+not zero. Wait overlaps side-stream work and is excluded from summed OPD section
+work; wall time remains authoritative. Peak memory/context error counters include
+startup/warmup; selected-state/coverage sums are differenced after warmup.
+
+## Training
+
+```bash
+bash train_qwen25_3b_tlt.sh trainer.total_training_steps=2
+bash train_qwen25_3b.sh trainer.total_training_steps=2
+# Then separate full jobs:
+bash train_qwen25_3b_tlt.sh
+bash train_qwen25_3b.sh
+```
+
+Root-level run_tlt_fair.sh/run_tlt_opd_reflex.sh are equivalent wrappers. Both use
+native FastRL GRPO with fixed pretrained EAGLE3, target LR1e-5, responses8, shared
+sampling/data config. They do not fake EAGLE3 Spot Trainer. OPD_TRAIN_PROJECTOR=1
+fails. Output remains outputs/rl/<model>_<method>_<timestamp>/. TP>1, overlap V2,
+DP attention and quantized/scaled draft heads remain explicitly unsupported in OPD.
+
+
+Canonical/output layout for the grid pair (defaults: batches1/2/4/8/16/32,
+seeds42/43, counterbalanced order): each `b<batch>_s<seed>/` contains `tlt/report.json`,
+`tlt_opd/report.json`, both `canonical_config.json` files, `comparison.json`,
+`summary.csv`, `config_diff.json`. The grid root also contains mode summaries,
+comparison/summary/config-diff and responses; aggregate responses are not counted
+twice. Differences report only OPD keys. Deltas include verified AAL, tokens/s,
+wall time and allocated/reserved memory, alongside OPD overhead (null when
+throughput profiling is OFF). For a configuration-only audit without GPU/assets:
+
+```bash
+DRY_RUN=true BENCH_BATCH_SIZES=1,2 BENCH_SEEDS=42,43 \
+bash benchmark_tlt_opd_pair.sh
+```

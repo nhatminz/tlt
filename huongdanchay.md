@@ -1,167 +1,132 @@
-# Cập nhật Reflex OPD (2026-10-07)
+# Chạy trên B200
 
-Hướng dẫn hiện tại: [RUN_TLT_OPD.md](RUN_TLT_OPD.md). Hai mode mới là `tlt` và
-`tlt_opd_reflex`; dùng profile trong folder SpecNaacl, rank8/Top16/LR0.01/stream1.
-Phần bên dưới được giữ làm lịch sử setup; các lệnh `tlt_reflex`/`REFLEX_*` cũ không
-còn hợp lệ sau OPD migration. Dependency/offline-wheel setup không thay đổi.
+Các default model/data giống SpecNaacl. Draft mặc định trỏ sang checkpoint FastGRPO
+mới tại `../SpecNaacl/outputs/pretrain/<MODEL_KEY>/latest_checkpoint`. Không dùng
+checkpoint compact/EAGLE3 cũ. Nếu copy TltReflex độc lập, override `MODEL`,
+`DATASET_PATH`, `DRAFT_CHECKPOINT`, `TARGET_CONFIG` đến các files đã copy.
 
----
-
-# Lệnh chạy TltReflex trên server
-
-Nếu dùng bộ wheel offline đã tạo ngày2026-10-06, làm theo
-[OFFLINE_WHEELS.md](OFFLINE_WHEELS.md) và chạy
-`INSTALL_RL=1 bash scripts/install_offline_wheels.sh` trong venv mới Python3.12.
-
-## 1. Cài đúng môi trường một lần
-
-Dùng venv riêng, không sửa `.venv` của SpecNaacl. Server offline cần copy
-wheelhouse đã tạo trên máy online; xem [ENVIRONMENT.md](ENVIRONMENT.md).
+## 1. Environment
 
 ```bash
 cd /workspace/storage-shared/nlp/minhpn19/TltReflex
-python3.12 -m venv .venv-tlt
-source .venv-tlt/bin/activate
+bash scripts/bootstrap_environment.sh
+source .venv/bin/activate
 export PYTHON_BIN="$(command -v python)"
-OFFLINE=1 INSTALL_RL=1 FASTRL_GIT_SOURCE="$PWD/artifacts/fastrl-bce3df7.bundle" \
-  WHEELHOUSE="$PWD/wheelhouse" bash scripts/install_environment.sh
-python -m pip check
-python scripts/validate_environment.py --rl
-```
-
-Sau này chỉ activate venv và export PYTHON_BIN; không cài lại mỗi lần train.
-Checkout sạch cần bootstrap source. Máy online chạy
-`./scripts/bootstrap_upstream.sh`; máy offline cần git bundle đã chuẩn bị như
-ENVIRONMENT.md. Nếu copy cả prepared upstream có `.git`, không cần clone lại.
-
-## 2. Smoke và benchmark standalone trước
-
-Qwen2.5-3B default dùng target:
-`/workspace/storage-shared/models/Qwen2.5-3B-Instruct`, data:
-`/workspace/storage-shared/nlp/minhpn19/data/DAPO-Math-17k-Processed/en/train-00000-of-00001.parquet`.
-Draft/config/mapping vẫn ở
-`../SpecNaacl/outputs/pretrain/qwen25_3b/latest_checkpoint`,
-`latest_draft_config.json`, `latest_vocab_mapping.pt`. Không pretrain lại.
-
-```bash
-CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b bash scripts/smoke_benchmark.sh
-CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b bash scripts/smoke_parity.sh
-
-# Benchmark 2 fresh engine runs, cùng dataset/sampler/scheduler:
-CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b BENCHMARK_PROMPTS=128 \
-  PAIR_DIR="$PWD/outputs/benchmarks/qwen25_3b_pair_seed42" bash benchmark_pair.sh
-
-# Eager component profiling là pass riêng, không dùng để claim production tokens/s:
-CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b COMPONENT_PROFILE=1 \
-  PAIR_DIR="$PWD/outputs/benchmarks/qwen25_3b_profile_seed42" bash benchmark_pair.sh
-
-# Grid batches1,2,4,8,16,32: production throughput + separate eager components
-CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b COMPONENT_PROFILE=1 bash scripts/benchmark_grid.sh
-```
-
-PAIR_DIR phải chưa tồn tại; mặc định tự tạo timestamp unique. Outputs:
-`PAIR_DIR/tlt/report.json`, `PAIR_DIR/tlt_reflex/report.json`, kèm
-`report.responses.jsonl`; component pass ở `*_components_eager/`.
-Đổi model bằng MODEL_KEY: `qwen25_1p5b`, `qwen25_3b`, `qwen25_7b`,
-`qwen25_14b`, `qwen3_1p7b`, `qwen3_4b`, `llama31_8b`.
-
-Override resource và hyperparameter ví dụ:
-
-```bash
-METHOD=tlt_reflex MODEL_KEY=qwen3_1p7b CUDA_VISIBLE_DEVICES=4 \
-  MODEL=/workspace/storage-shared/models/Qwen3-1.7B \
-  DATASET=simplelr BATCH_SIZE=8 RESPONSES_PER_PROMPT=8 \
-  MAX_NEW_TOKENS=2048 TEMPERATURE=1 TOP_P=0.95 SEED=42 \
-  REFLEX_FEATURE_DIM=8 REFLEX_LR=0.05 REFLEX_WEIGHT_DECAY=0 \
-  bash run_benchmark.sh
-```
-
-Không cần override draft path nếu naming SpecNaacl đúng như default.
-Checkpoint khác: đặt DRAFT_CHECKPOINT, DRAFT_CONFIG, VOCAB_MAPPING và một
-DRAFT_EXPORT mới. Conversion kiểm tra cấu trúc/mapping/features, không random
-khi checkpoint thiếu/hỏng. Hai method phải dùng cùng export và settings.
-
-## 3. Chạy GRPO bằng chính pipeline FastRL
-
-Cần INSTALL_RL=1 và `validate_environment.py --rl` pass.
-Train batch/LR dưới đây theo upstream, không LoRA trainer SpecNaacl.
-
-```bash
-CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b METHOD=tlt \
-  RL_BATCH_SIZE=64 RL_MINI_BATCH_SIZE=4 TARGET_LR=1e-6 NUM_EPOCHS=1 \
-  bash run_rl.sh
-
-CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b METHOD=tlt_reflex \
-  RL_BATCH_SIZE=64 RL_MINI_BATCH_SIZE=4 TARGET_LR=1e-6 NUM_EPOCHS=1 \
-  bash run_rl.sh
-```
-
-Short first RL smoke (không full training):
-
-```bash
-CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b METHOD=tlt \
-  RL_BATCH_SIZE=4 RL_MINI_BATCH_SIZE=4 MAX_NEW_TOKENS=64 \
-  bash run_rl.sh trainer.total_training_steps=1
-CUDA_VISIBLE_DEVICES=0 MODEL_KEY=qwen25_3b METHOD=tlt_reflex \
-  RL_BATCH_SIZE=4 RL_MINI_BATCH_SIZE=4 MAX_NEW_TOKENS=64 \
-  bash run_rl.sh trainer.total_training_steps=1
-```
-
-Hoặc launcher từng model, file thường = TLT+Reflex, `_tlt.sh` = original TLT:
-
-```bash
-CUDA_VISIBLE_DEVICES=0 bash train_qwen25_3b.sh
-CUDA_VISIBLE_DEVICES=0 bash train_qwen25_3b_tlt.sh
-CUDA_VISIBLE_DEVICES=0 bash train_qwen3_1p7b.sh
-CUDA_VISIBLE_DEVICES=0 bash train_qwen3_1p7b_tlt.sh
-CUDA_VISIBLE_DEVICES=0 bash train_qwen3_4b.sh
-CUDA_VISIBLE_DEVICES=0 bash train_qwen3_4b_tlt.sh
-```
-
-Hai file tương ứng cũng có cho 1.5B/7B/14B/Llama8B. RL output mặc định:
-`outputs/rl/<model>_<method>_<timestamp>/logs/console.log`, `checkpoints/`,
-`data/train.parquet` (converted VERL format từ data local). Đặt RUN_DIR để đổi;
-không ghi đè một run tồn tại. Muốn resume dùng path run mới và explicit
-Hydra override `trainer.resume_mode=resume_path trainer.resume_from_path=...`.
-Validation mặc định OFF theo upstream (`test_freq=-1`, val_before_train=false);
-EVAL_DATA mặc định trỏ train chỉ để thỏa schema, **không phải held-out eval**.
-Muốn đánh giá, cung cấp parquet VERL held-out thật và override tần suất:
-
-```bash
-: "${EVAL_DATA:?Hãy đặt EVAL_DATA tới parquet VERL held-out thật của bạn}"
-METHOD=tlt_reflex MODEL_KEY=qwen25_3b EVAL_DATA="$EVAL_DATA" \
-  bash run_rl.sh trainer.test_freq=30 trainer.val_before_train=true
-```
-
-Path heldout ở ví dụ là tham số bắt buộc do người dùng cung cấp, không default
-resource giả trong launcher. RL giữ ODT EAGLE3 OFF: upstream trainer factory
-chưa support; enable=true là lỗi rõ ràng, không trainer thay thế.
-
-## 4. Config/source/identity checks không train dài
-
-```bash
-python scripts/audit_upstream.py
-DRY_RUN=true METHOD=tlt bash run_rl.sh
-DRY_RUN=true METHOD=tlt_reflex bash run_rl.sh
-DRY_RUN=true METHOD=tlt bash run_benchmark.sh
-python -m compileall -q .
+export CUDA_VISIBLE_DEVICES=0
+python scripts/validate_environment.py --require-cuda
+python scripts/check_source_manifest.py
 python -m pytest -q
-python -m pip check
 ```
 
-So sánh engine với fork upstream **chưa sửa** (hai processes riêng):
+Pins là Torch2.8.0/cu128, Triton3.4.0, Transformers4.51.3, PEFT0.17.1, như source.
+Old wheelhouse SGLang có thể khác dependencies; bootstrap mới dùng requirements mới.
+Offline có thể set `WHEELHOUSE=/path/to/new-compatible-wheels`.
+
+## 2. Paths/config dùng chung
 
 ```bash
-METHOD=tlt OUTPUT_DIR="$PWD/outputs/upstream_check/pristine" \
-  bash run_benchmark.sh --pristine-upstream
-METHOD=tlt OUTPUT_DIR="$PWD/outputs/upstream_check/off" bash run_benchmark.sh
-python scripts/compare_upstream_outputs.py \
-  outputs/upstream_check/pristine/report.json outputs/upstream_check/off/report.json
+export MODEL_KEY=qwen25_3b
+export MODEL=/workspace/storage-shared/models/Qwen2.5-3B-Instruct
+export DATASET=simplelr
+export DATASET_PATH=/workspace/storage-shared/nlp/minhpn19/data/simplelr_abel_level3to5/train.parquet
+export DRAFT_CHECKPOINT="$(realpath ../SpecNaacl/outputs/pretrain/$MODEL_KEY/latest_checkpoint)"
+export TARGET_CONFIG="$MODEL/config.json"
+export TARGET_ADAPTER=""
+export TARGET_LR=1e-6 DRAFT_LR=1e-4
+export BATCH_SIZE=8 ACCUMULATION_STEPS=4 DRAFT_ACCUMULATION_STEPS=1
+export RESPONSES_PER_PROMPT=8 TRAIN_SUBSET_SEED=42
+export TLT_BS_THRESHOLD=32 TLT_SD_WARMUP_CHECKS=10
+export TLT_MAB_CONFIGS=8_4_48,8_4_32,8_4_16,8_4_8
+export TLT_MAB_ALGORITHM=BEG TLT_MAB_BS_THRESHOLDS=1,2,5,21
+export TLT_MAB_SEED=42
+export OPD_RANK=8 OPD_TOPK=16 OPD_FAST_LR=0.01
+export OPD_UPDATE_STREAM=1 OPD_TRAIN_PROJECTOR=1
+export OPD_PROPOSAL_MODE=auto OPD_DENSE_IMPLEMENTATION=auto
+export OPD_PROPOSAL_PROFILE_DIR="$PWD/outputs/benchmarks/opd_proposals"
+unset OPD_PROPOSAL_PROFILE OPD_TUNE_OUTPUT
 ```
 
-Adaptive MAB quyết định theo timing nên cùng seed không bảo đảm tree/output
-bitwise giống nhau. Script báo fail khi output khác; không che bằng fallback.
-Để kiểm tra identity deterministic riêng, dùng **cùng** `MAB_CONFIGS=''`
-và `TEMPERATURE=0` cho cả hai, không trộn diagnostic đó với adaptive benchmark.
-Launcher dùng `${MAB_CONFIGS:-default}` nên override list rỗng bằng
-`--mab-configs ''` trên CLI cho benchmark (không tự tắt MAB mặc định).
+## 3. Tune TLT-native profile trên chính B200
+
+```bash
+export OPD_TUNE_MODELS="$MODEL_KEY"
+export OPD_TUNE_ITERATIONS=30
+bash scripts/tune_tlt_opd_proposals.sh
+python scripts/validate_tlt_opd_profile.py \
+  --target-config "$TARGET_CONFIG" --draft-checkpoint "$DRAFT_CHECKPOINT" \
+  --rank 8 --dtype bf16 --topk 16 --profile-dir "$OPD_PROPOSAL_PROFILE_DIR"
+export OPD_REQUIRE_CALIBRATED_PROFILE=1
+```
+
+Profile dùng full V; key gồm GPU/CC, Torch/Triton/CUDA, V, rank, dtype, kernel SHA
+và TLT execution fingerprint. Source SpecNaacl profile và profile RTX3090 không được
+coi là compatible cho TLT trên B200. Tuner dedup `batch*contexts`, scattered active IDs
+với seed42, kiểm tra 3 backend parity và load bằng ProposalProfile trước atomic write.
+Auto chọn sparse/fused/GEMM bằng measured/interpolated cost. `OPD_FAST_LR` không thay
+cách tính OPD; profile dispatch chỉ quyết định implementation kernel.
+
+## 4. GPU smoke ba cấu hình trên cùng weights/prompts
+
+Đây là frozen rollout smoke, chưa update target/draft. Nếu muốn kiểm tra online draft,
+thêm `--online-draft`. Mỗi lệnh dùng fresh model/checkpoint; B reset mỗi rollout.
+
+```bash
+export BENCH_BATCH_SIZES=1 BENCH_SEEDS=42 BENCH_ITERATIONS=1 BENCH_WARMUP=1
+export BENCH_MAX_LENGTH=256 BENCH_MAX_PROMPT_LENGTH=96
+export RESPONSES_PER_PROMPT=2
+METHOD=tlt BENCH_OUTPUT="$PWD/outputs/smoke/tlt" bash run_benchmark.sh
+METHOD=tlt_opd_reflex OPD_FAST_LRS=0 BENCH_OUTPUT="$PWD/outputs/smoke/opd_zero" bash run_benchmark.sh
+METHOD=tlt_opd_reflex OPD_FAST_LRS=0.01 BENCH_OUTPUT="$PWD/outputs/smoke/opd_live" bash run_benchmark.sh
+```
+
+## 5. Train hai method riêng từ cùng checkpoint ban đầu
+
+```bash
+export BATCH_SIZE=8 RESPONSES_PER_PROMPT=8
+export GEN_MAX_LENGTH=2048 MAX_PROMPT_LENGTH=2048
+unset RESUME RUN_DIR RUN_NAME TLT_STRATEGY_REPLAY
+bash train_qwen25_3b_tlt.sh
+bash train_qwen25_3b.sh
+```
+
+`train_qwen25_3b_tlt.sh` = pure TLT; `train_qwen25_3b.sh` = TLT+OPD.
+Generic: `bash scripts/run_tlt_fair.sh` và `bash scripts/run_tlt_opd_reflex.sh`.
+Các model khác có cùng cặp wrapper. Mỗi run viết output độc lập, giữ cùng init draft,
+target adapter, dataset order/seed, optimizer/LR/cadence. Chiến lược có thể adapt khác
+vì performance/acceptance khác; đó là system-level comparison đã yêu cầu.
+
+Smoke training ít bước: thêm `--max_grpo_steps 2`. Resume dùng cùng method/config,
+`RUN_DIR=<existing-run> RESUME=auto bash train_qwen25_3b.sh`; scheduler/MAB RNG và
+metrics được lưu cùng checkpoint rank-local.
+
+## 6. Pair benchmark nhiều batch/seed, counterbalanced
+
+```bash
+export RESPONSES_PER_PROMPT=8
+export BENCH_BATCH_SIZES=1,2,4,8,16,32
+export BENCH_SEEDS=42,43,44,45
+export BENCH_ITERATIONS=2 BENCH_WARMUP=1
+export BENCH_MAX_LENGTH=512 BENCH_MAX_PROMPT_LENGTH=256
+export OPD_FAST_LRS=0.01 OPD_STREAMS=1
+export BENCH_OUTPUT="$PWD/outputs/benchmarks/tlt_fastgrpo_pair"
+bash scripts/sweep_tlt_opd_reflex.sh
+```
+
+Even seed chạy TLT→OPD, odd seed OPD→TLT. Đây là frozen rollout benchmark từ cùng
+checkpoint. Nếu đo cả draft online training: `BENCH_ONLINE_DRAFT=1 bash scripts/sweep_tlt_opd_reflex.sh`.
+Dùng output mới cho mỗi experiment. Xem `report.json`, `summary.csv`, `responses.jsonl`,
+`strategy_trace.jsonl`, `config_diff.json`. Config diff phải chỉ có key `opd` khác.
+Training full GRPO comparison là hai train runs ở bước5, không lẫn với frozen metrics.
+
+## 7. Optional controlled strategy replay
+
+```bash
+export BENCH_BATCH_SIZES=1 BENCH_SEEDS=42 BENCH_ITERATIONS=2
+BENCH_METHOD=tlt BENCH_OUTPUT="$PWD/outputs/benchmarks/record_tlt" bash scripts/sweep_tlt_opd_reflex.sh
+export TLT_STRATEGY_REPLAY="$PWD/outputs/benchmarks/record_tlt/runs/batch1_seed42_lr0.01_stream1/tlt/strategy_trace.jsonl"
+BENCH_OUTPUT="$PWD/outputs/benchmarks/controlled_pair" bash scripts/sweep_tlt_opd_reflex.sh
+unset TLT_STRATEGY_REPLAY
+```
+
+Giữ nguyên responses/length/sampling/checkpoint/iterations. Khi live batch/phase khác
+trace, replay fail rõ ràng để tránh gán nhãn controlled cho một workload không khớp.
