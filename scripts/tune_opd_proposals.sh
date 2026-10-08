@@ -13,6 +13,8 @@ cmd=("$PYTHON_BIN" "$ROOT/scripts/tune_opd_proposals.py"
   --topk "${OPD_TOPK:-16}" --iterations "${OPD_TUNE_ITERATIONS:-30}"
   --batch-size "${BATCH_SIZE:-8}" --responses "${RESPONSES_PER_PROMPT:-${REPEATED_GENERATE_NUMS:-8}}"
   --max-draft-k "${MAX_DRAFT_K:-8}"
+  --tlt-bs-threshold "${TLT_BS_THRESHOLD:-32}"
+  --tlt-strategies "${TLT_MAB_CONFIGS:-8_4_48,8_4_32,8_4_16,8_4_8}"
   --context-points "${OPD_TUNE_CONTEXT_POINTS:-7}" --active-points "${OPD_TUNE_ACTIVE_POINTS:-8}")
 if [[ -n "${OPD_RANK:-}" ]];then cmd+=(--rank "$OPD_RANK");fi
 if [[ -n "${OPD_TUNE_SHAPES:-}" ]];then cmd+=(--shapes "$OPD_TUNE_SHAPES");fi

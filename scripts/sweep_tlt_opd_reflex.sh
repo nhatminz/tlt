@@ -3,6 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export MODEL_KEY="${MODEL_KEY:-qwen25_3b}"
 export METHOD="${METHOD:-tlt_opd_reflex}"
+export OPD_REQUIRE_CALIBRATED_PROFILE="${OPD_REQUIRE_CALIBRATED_PROFILE:-1}"
 source "$ROOT/configs/_shared/b200_common.env"
 source "$ROOT/configs/$MODEL_KEY/b200.env"
 case "${DATASET,,}" in
@@ -27,6 +28,7 @@ cmd=("$PYTHON_BIN" "$ROOT/scripts/benchmark_tlt_opd.py"
  --visited-weight "$OPD_VISITED_WEIGHT" --frontier-weight "$OPD_FRONTIER_WEIGHT"
  --draft-lr "$DRAFT_LR" --draft-accumulation-steps "$DRAFT_ACCUMULATION_STEPS")
 if [[ "${BENCH_ONLINE_DRAFT:-0}" == 1 ]];then cmd+=(--online-draft);fi
+if [[ "${OPD_PROFILE:-0}" == 1 ]];then cmd+=(--profile);fi
 cmd+=("$@")
 printf 'Output: %s\nCommand:' "$BENCH_OUTPUT";printf ' %q' "${cmd[@]}";printf '\n'
 if [[ "${DRY_RUN:-false}" == true ]];then cmd+=(--dry-run);fi

@@ -2116,6 +2116,8 @@ final_medusa_acceptance_rate = final_metrics['draft_acceptance_rate']
 final_accepted_tokens_per_medusa_step = final_metrics['accepted_tokens_per_medusa_step']
 summary = {
     "architecture": "TLT adaptive rollout + FastGRPO drafter",
+    "effective_aal": float(final_average_accept_length),
+    "speculative_aal": rollout_metrics.state.get('tlt_speculative_accepted_length',0)/max(rollout_metrics.state.get('tlt_speculative_response_rounds',0),1),
     "tlt_cumulative_metrics": {k:v for k,v in rollout_metrics.state.items() if k.startswith('tlt_')},
     "tlt_last_rollout": model._tlt_scheduler.finish() if model._tlt_scheduler.rollout_id >= 0 else None,
     "run_name": version_name,

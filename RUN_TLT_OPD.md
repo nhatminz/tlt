@@ -58,7 +58,8 @@ python scripts/validate_tlt_opd_profile.py \
 export OPD_REQUIRE_CALIBRATED_PROFILE=1
 ```
 
-Profile dùng full V; key gồm GPU/CC, Torch/Triton/CUDA, V, rank, dtype, kernel SHA
+Tuner default workload chỉ phủ tail: `max_live=min(BATCH_SIZE*RESPONSES_PER_PROMPT, TLT_BS_THRESHOLD)`
+và `max_contexts=max_live*max(TLT strategy K)`. Profile dùng full V; key gồm GPU/CC, Torch/Triton/CUDA, V, rank, dtype, kernel SHA
 và TLT execution fingerprint. Source SpecNaacl profile và profile RTX3090 không được
 coi là compatible cho TLT trên B200. Tuner dedup `batch*contexts`, scattered active IDs
 với seed42, kiểm tra 3 backend parity và load bằng ProposalProfile trước atomic write.
@@ -68,7 +69,8 @@ cách tính OPD; profile dispatch chỉ quyết định implementation kernel.
 ## 4. GPU smoke ba cấu hình trên cùng weights/prompts
 
 Đây là frozen rollout smoke, chưa update target/draft. Nếu muốn kiểm tra online draft,
-thêm `--online-draft`. Mỗi lệnh dùng fresh model/checkpoint; B reset mỗi rollout.
+thêm `--online-draft`. Mỗi lệnh dùng fresh model/checkpoint; B reset mỗi rollout. Với warmup checks10,
+round10 vẫn target-only, prefill drafter sau round10 và round11 mới speculative.
 
 ```bash
 export BENCH_BATCH_SIZES=1 BENCH_SEEDS=42 BENCH_ITERATIONS=1 BENCH_WARMUP=1
@@ -89,6 +91,8 @@ bash train_qwen25_3b_tlt.sh
 bash train_qwen25_3b.sh
 ```
 
+`tlt_opd_reflex` launchers mặc định require calibrated profile; explicit
+`OPD_REQUIRE_CALIBRATED_PROFILE=0` chỉ dành cho smoke/development.
 `train_qwen25_3b_tlt.sh` = pure TLT; `train_qwen25_3b.sh` = TLT+OPD.
 Generic: `bash scripts/run_tlt_fair.sh` và `bash scripts/run_tlt_opd_reflex.sh`.
 Các model khác có cùng cặp wrapper. Mỗi run viết output độc lập, giữ cùng init draft,
@@ -107,7 +111,7 @@ export BENCH_BATCH_SIZES=1,2,4,8,16,32
 export BENCH_SEEDS=42,43,44,45
 export BENCH_ITERATIONS=2 BENCH_WARMUP=1
 export BENCH_MAX_LENGTH=512 BENCH_MAX_PROMPT_LENGTH=256
-export OPD_FAST_LRS=0.01 OPD_STREAMS=1
+export OPD_FAST_LRS=0,0.01 OPD_STREAMS=1
 export BENCH_OUTPUT="$PWD/outputs/benchmarks/tlt_fastgrpo_pair"
 bash scripts/sweep_tlt_opd_reflex.sh
 ```
@@ -115,7 +119,11 @@ bash scripts/sweep_tlt_opd_reflex.sh
 Even seed chạy TLT→OPD, odd seed OPD→TLT. Đây là frozen rollout benchmark từ cùng
 checkpoint. Nếu đo cả draft online training: `BENCH_ONLINE_DRAFT=1 bash scripts/sweep_tlt_opd_reflex.sh`.
 Dùng output mới cho mỗi experiment. Xem `report.json`, `summary.csv`, `responses.jsonl`,
-`strategy_trace.jsonl`, `config_diff.json`. Config diff phải chỉ có key `opd` khác.
+`strategy_trace.jsonl`, `config_diff.json`. Config diff phải chỉ có key `opd` khác. `effective_aal` gồm cả target-only;
+`speculative_aal` chỉ gồm SD. `tlt_transition_draft_prefill_s` được đo riêng, ngoài MAB reward.
+Có thể chạy `OPD_PROFILE=1` cùng frozen benchmark để lấy OPD section timings qua
+replay riêng, không thêm replay vào measured wall/throughput/peak. Không dùng tùy chọn này
+cùng `BENCH_ONLINE_DRAFT=1`.
 Training full GRPO comparison là hai train runs ở bước5, không lẫn với frozen metrics.
 
 ## 7. Optional controlled strategy replay

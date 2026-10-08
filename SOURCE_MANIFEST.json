@@ -63,7 +63,7 @@
       "destination": "helper/rollout_metrics.py",
       "snapshot": "sources/SpecNaacl/helper/rollout_metrics.py",
       "sha256": "53e823fb0c1f9d289e8193ccf080393add5569198ea1ab41c5c78b0a517545c2",
-      "port_sha256": "d41dd8d9610d44b82e4b46a021906f5493480c9946f4a98f2d877fc7485937ea",
+      "port_sha256": "67ddb989f234216a55dc66638cadc1f4b79027ae96048fc4421dba7125f4dc66",
       "port_status": "adapted"
     },
     {
@@ -167,7 +167,7 @@
       "destination": "helper/opd_profiles.py",
       "snapshot": "sources/SpecNaacl/helper/opd_profiles.py",
       "sha256": "feacabb631e3ee1a87d4fde179ab64e9ad4308465e28e47b34b2ffb2d5092a1c",
-      "port_sha256": "17251ae75ad16a8aa8d48beeb9cefe1689ba0e0faabf05ef2caf269de89ea8ed",
+      "port_sha256": "1ec4cfe871ccedb627f65fc37c721b71adf3f530b4c22657767e8bce9abf11c6",
       "port_status": "adapted"
     },
     {
@@ -247,7 +247,7 @@
       "destination": "grpo_speculative.py",
       "snapshot": "sources/SpecNaacl/grpo_speculative.py",
       "sha256": "b64fd0d91c5a6c4419beb4a58e4238e496c9eb0ee617dc7a44e7b2301e54221f",
-      "port_sha256": "aa326facb37c0ad5533adfdbe7a090cb9434c6da664331a5fa75159ec2241a53",
+      "port_sha256": "af9f6683988665bf7394f4831b963c5c254573df83c7e9fa4cb9cead79447ab8",
       "port_status": "adapted"
     },
     {
@@ -311,7 +311,7 @@
       "destination": "scripts/tune_opd_proposals.py",
       "snapshot": "sources/SpecNaacl/scripts/tune_opd_proposals.py",
       "sha256": "5a6fe3d0cace3344e7ca27c1a6e03b9a59955af08e868e0a1a78f2508506dbda",
-      "port_sha256": "39eec358509cbbfd3b9abb410efe3843e4d4ef93f0e46eebe3c348a4adb16df1",
+      "port_sha256": "3b4dbd4b9c6e65f8fe86f64602b41e529301db4a8cccb5049f8006b6f6b8b405",
       "port_status": "adapted"
     },
     {
@@ -319,15 +319,15 @@
       "destination": "scripts/tune_opd_proposals.sh",
       "snapshot": "sources/SpecNaacl/scripts/tune_opd_proposals.sh",
       "sha256": "0679bccc342048d4b1b5f86ea82b9fae94516f885c294d2c957e8d5e7547e156",
-      "port_sha256": "0679bccc342048d4b1b5f86ea82b9fae94516f885c294d2c957e8d5e7547e156",
-      "port_status": "exact"
+      "port_sha256": "5c4c0aff352d7e9495bed61a0f33aadd216d54a952460408ef9d3f1cfba0212f",
+      "port_status": "adapted"
     },
     {
       "source": "SpecNaacl/scripts/resolve_opd_profile.py",
       "destination": "scripts/resolve_opd_profile.py",
       "snapshot": "sources/SpecNaacl/scripts/resolve_opd_profile.py",
       "sha256": "57b148eae2f2f0b2a4e4cb632c08075a8fc590759ee7a439d049e5a3a4403399",
-      "port_sha256": "4a7a892b9680974f3a0e24e2aabe9208a384b1211cbf09a3d35480b6070e6041",
+      "port_sha256": "785cc60ef94d76178ffd44594529a4ebc0e606581b8de838f7a7a2cda514a6e3",
       "port_status": "adapted"
     },
     {
@@ -335,7 +335,7 @@
       "destination": "scripts/launch/train_model.sh",
       "snapshot": "sources/SpecNaacl/scripts/launch/train_model.sh",
       "sha256": "0d38b4b3b277872521c13833e304bcde7948172833cc651f535932860c2093fc",
-      "port_sha256": "fbf6ac54a32831e1411567a721c2c9111f735d805992d588fdd003a2597dbcc6",
+      "port_sha256": "0672921df5b7aaece53e8ebc92f7dc08bb1942950a1f28159fc8b79a27d3deca",
       "port_status": "adapted"
     },
     {
@@ -399,7 +399,7 @@
       "destination": "configs/_shared/b200_common.env",
       "snapshot": "sources/SpecNaacl/configs/_shared/b200_common.env",
       "sha256": "36e72c90151608db667dd83d89fc4af60ff49dbcc04ec4f06daaabf58171ecfd",
-      "port_sha256": "f5b35db86ea1afcdd5c856980e0cd37c9cc66c69b6fb9c82aa06a3e797dbecd7",
+      "port_sha256": "ee9579353cf4097bfcb366ce63236c0ab121288ee187861143a54ff5503f327a",
       "port_status": "adapted"
     },
     {
@@ -459,7 +459,7 @@
       "destination": "scripts/benchmark_tlt_opd.py",
       "snapshot": "sources/SpecNaacl/scripts/benchmark_opd_reflex.py",
       "sha256": "9da3657060ff804a102da3f285a0aac26577d27f0c04e7a47165071f8a79918d",
-      "port_sha256": "c71829c4c3feef6ee8e7540ec739db607cf32482c0aeb347958fe6e674b97934",
+      "port_sha256": "188a1bead848de82aebe13fccb3e62f22263afd3d39c80e2a8db8e27ff106f5c",
       "port_status": "adapted"
     },
     {
@@ -488,11 +488,12 @@
     }
   ],
   "tlt_algorithm_files": {
-    "helper/tlt_generate.py": "738b17eddb8f25e04af1ea3f193f50a5c3d248a12cfec39dddc83e040077877a",
-    "helper/tlt_scheduler.py": "1dc0a8a27e657bc9df5c0e88bb8ab43da1491dd6d0d8d3d980c03a419632254a",
+    "helper/tlt_generate.py": "f677cab64884c261cc32b55123a5e8866adce857e2463e271f6d17f59f974bf9",
+    "helper/tlt_scheduler.py": "6c7a677b3e36a98c012ab2eb3c2c6515a84c28359b79c8821dca83e0b55f0136",
     "helper/tlt_transition.py": "62f1bd54da5b464b047bd1034f6ee2195da9ce0d731b8a90de0155cdc96032c1",
     "helper/tlt_workspace.py": "59ad22dd5919d9f6fc4a7b567e70ff6a299a83110f84e1502c798cccb89fc43f",
-    "helper/tlt_mab.py": "14ed4ba8ad00a616c146ab3523988d39fb9ea8bf49c626c9c43fcd5fef8ffd96"
+    "helper/tlt_mab.py": "14ed4ba8ad00a616c146ab3523988d39fb9ea8bf49c626c9c43fcd5fef8ffd96",
+    "helper/tlt_timing.py": "46cbbd3877ac62f7a773c59516644f143b83452ad723c392be18098f496cf9ed"
   },
   "fastrl_commit": "bce3df7a4d46473912e9b81bf47bca419729557f"
 }

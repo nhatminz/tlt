@@ -28,6 +28,9 @@ if [[ ! "$OPD_KV_MAX_RETAINED_TOKENS" =~ ^[0-9]+$ ]];then
   echo "ERROR: OPD_KV_MAX_RETAINED_TOKENS must be a nonnegative integer" >&2;exit 2
 fi
 : "${MODEL:?MODEL is required}"
+if [[ "$METHOD" == tlt_opd_reflex ]];then
+  export OPD_REQUIRE_CALIBRATED_PROFILE="${OPD_REQUIRE_CALIBRATED_PROFILE:-1}"
+fi
 case "$METHOD" in
   tlt|tlt_opd_reflex) ;;
   *) echo "ERROR: METHOD must be tlt or tlt_opd_reflex, got: $METHOD" >&2; exit 2 ;;

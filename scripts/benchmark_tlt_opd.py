@@ -33,6 +33,7 @@ def parser():
     p.add_argument('--visited-weight',type=float,default=1.);p.add_argument('--frontier-weight',type=float,default=1.)
     p.add_argument('--dtype',choices=['bf16','fp16'],default='bf16');p.add_argument('--attn-implementation',default='sdpa')
     p.add_argument('--online-draft',action='store_true',help='Same upstream loss/optimizer/cadence after each rollout; target remains frozen')
+    p.add_argument('--profile',action='store_true',help='Separate frozen replay for inclusive OPD timings; excluded from measured wall time')
     p.add_argument('--strategy-replay',default=os.getenv('TLT_STRATEGY_REPLAY',''))
     p.add_argument('--tiny',action='store_true',help='Explicit real-transformer CUDA fixture; never a full-model benchmark')
     p.add_argument('--dry-run',action='store_true')
@@ -48,6 +49,7 @@ def parse_args(argv=None):
     if not a.fast_lrs or min(a.fast_lrs)<0 or not set(a.streams)<={0,1}:p.error('LR>=0 and streams 0/1 required')
     if min(a.responses,a.iterations,a.max_length,a.max_prompt_length,a.rank,a.topk,a.draft_accumulation_steps)<1 or a.warmup<0:p.error('positive sizes, warmup>=0 required')
     if not a.tiny and not all((a.target_model,a.draft_checkpoint,a.dataset_path)):p.error('real target/draft/dataset paths required (or explicit --tiny fixture)')
+    if a.profile and a.online_draft:p.error('--profile is a separate frozen replay; run online-draft measurement separately')
     return a
 
 
@@ -61,7 +63,7 @@ def canonical_config(args,batch,seed,method,lr,stream):
         dataset=args.dataset_path,fixture=args.tiny,prompt_order='dataset order, no shuffle',
         batch_size=batch,responses=args.responses,seed=seed,temperature=args.temperature,top_p=args.top_p,top_k=args.top_k,
         dtype=args.dtype,attention=args.attn_implementation,max_length=args.max_length,max_prompt_length=args.max_prompt_length,
-        warmup=args.warmup,measured_iterations=args.iterations,tlt=asdict(TLTConfig.from_env()),
+        warmup=args.warmup,measured_iterations=args.iterations,tlt=asdict(TLTConfig.from_env()),profiling_replay=args.profile,
         training=dict(online_draft=args.online_draft,objective='fastgrpo_smoothl1_2_ce_0.1',lr=args.draft_lr,
             optimizer='AdamW',accumulation=args.draft_accumulation_steps,update_cadence='existing draft optimizer boundary',target_frozen=True),
         verifier='SpecNaacl FastGRPO PackedTree/sample-once token matching',cuda_graph=False,
@@ -175,7 +177,7 @@ def benchmark(args):
                 scheduler=TLTScheduler(cfg,trace_path='',replay_path=replay)
                 opt=draft_optimizer(model.draft_model,args.draft_lr) if args.online_draft else None
                 return scheduler,opt
-            def rollout(entry,actual_seed,scheduler,opt,index):
+            def rollout(entry,actual_seed,scheduler,opt,index,profile=False):
                 torch.manual_seed(actual_seed)
                 with torch.inference_mode():
                     output=speculative_generate(model,entry['input_ids'],entry['attention_mask'],tokenizer,
@@ -183,7 +185,7 @@ def benchmark(args):
                         temperature=args.temperature,top_p=args.top_p,top_k=args.top_k or None,max_length=args.max_length,
                         return_all_draft_input=args.online_draft,statistical_time=False,opd_rank=args.rank,opd_topk=args.topk,
                         opd_fast_lr=lr,opd_update_stream=bool(stream),opd_visited_weight=args.visited_weight,
-                        opd_frontier_weight=args.frontier_weight,opd_train_projector=args.online_draft)
+                        opd_frontier_weight=args.frontier_weight,opd_train_projector=args.online_draft,opd_profile=profile)
                 if args.online_draft:
                     for key in ('all_draft_input_states','all_draft_input_ids'):output[key]=[x.clone() for x in output[key]]
                     model.train();model.target_model.eval()
@@ -201,6 +203,7 @@ def benchmark(args):
             scheduler,opt=reset(measured=True)
             try:
                 for i,entry in enumerate(batches):
+                    replay_state=scheduler.state_dict() if args.profile else None
                     before=counts.copy();torch.cuda.synchronize();torch.cuda.reset_peak_memory_stats();start=time.perf_counter()
                     output=rollout(entry,seed+i,scheduler,opt,i)
                     torch.cuda.synchronize();wall=time.perf_counter()-start
@@ -208,7 +211,7 @@ def benchmark(args):
                     if forwards['target']!=1+output['batch_verification_rounds']:raise AssertionError('extra target transformer forward')
                     row=dict(method=method,batch_size=batch,seed=seed+i,case_seed=seed,iteration=i,fast_lr=lr,stream=stream,run_position=position,
                         prompt_sha256=digest.hexdigest(),generation_wall_s=wall,generated_tokens=sum(output['response_generated_tokens']),
-                        aal=output['total_acc_length']/max(output['total_decoded_token_num'],1),
+                        aal=output['effective_aal'],effective_aal=output['effective_aal'],speculative_aal=output['speculative_aal'],
                         verification_rounds=output['total_decoded_token_num'],batch_verification_rounds=output['batch_verification_rounds'],
                         accepted_draft_tokens=output['total_accepted_draft_tokens'],proposed_draft_tokens=output['total_proposed_draft_tokens'],
                         acceptance_rate=output['draft_acceptance_rate'],target_forwards=forwards['target'],draft_forwards=forwards['draft'],
@@ -223,6 +226,15 @@ def benchmark(args):
                     for n,tokens in enumerate(output['generated_token_ids']):
                         responses.append(dict(method=method,seed=seed+i,batch_size=batch,fast_lr=lr,stream=stream,prompt_id=i*batch+n//args.responses,
                             response_index=n%args.responses,tokens=tokens))
+                    if args.profile:
+                        replay_scheduler=TLTScheduler(cfg,trace_path='',replay_path=args.strategy_replay)
+                        replay_scheduler.load_state_dict(replay_state)
+                        profiling=rollout(entry,seed+i,replay_scheduler,None,i,profile=True)
+                        row['opd_overhead_ms']=profiling['opd_overhead_ms']
+                        row['opd_feedback_ms']=profiling['opd_feedback_ms']
+                        row['opd_profile_sections_ms']=profiling.get('opd_profile_sections_ms')
+                        row['opd_overhead_measured']=profiling['opd_overhead_measured']
+                        row['opd_overhead_basis']='separate frozen replay: inclusive feature/proposal/feedback GPU time'
             finally:h.remove();d.remove()
             del model,tokenizer,initial,batches,scheduler,opt,output
             gc.collect();torch.cuda.empty_cache()
@@ -233,7 +245,7 @@ def benchmark(args):
     (destination/'report.json').write_text(json.dumps(report,indent=2)+'\n')
     for name,data in [('responses.jsonl',responses),('strategy_trace.jsonl',traces)]:
         (destination/name).write_text(''.join(json.dumps(row)+'\n' for row in data))
-    fields=['method','batch_size','seed','case_seed','iteration','fast_lr','stream','run_position','aal','accepted_draft_tokens','proposed_draft_tokens',
+    fields=['method','batch_size','seed','case_seed','iteration','fast_lr','stream','run_position','aal','effective_aal','speculative_aal','opd_overhead_ms','opd_feedback_ms','accepted_draft_tokens','proposed_draft_tokens',
         'acceptance_rate','verification_rounds','target_forwards','draft_forwards','generation_wall_s','tokens_per_s','peak_allocated_bytes',
         'tlt_target_only_rounds','tlt_speculative_rounds','tlt_sd_transition_count','tlt_transition_draft_prefill_s']
     with (destination/'summary.csv').open('w',newline='') as f:

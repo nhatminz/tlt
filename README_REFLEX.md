@@ -32,10 +32,10 @@ Checkpoint EAGLE3 cũ không tương thích; dùng checkpoint FastGRPO sau rewri
 
 Target prefill và các round target-only giữ `features[t]=target_hidden(x[t])`
 và `draft_input_ids[t]=x[t+1]`, gồm cả token bonus đã sample. Chưa gọi draft
-transformer. Sau khi live batch <= threshold đủ số checks, chạy một draft-only
-causal prefill trên toàn bộ history còn sống, với padding/position_ids đúng source.
+transformer. Round đạt đủ warmup checks vẫn target-only và đánh dấu pending. Sau round đó,
+chạy một draft-only causal prefill trên toàn bộ history còn sống, với padding/position_ids đúng source.
 Draft KV, next-feature và lm-head hidden được dựng từ prefix này; target KV tiếp tục
-được tái sử dụng. SD giữ enabled đến hết rollout. Compaction chọn cả history owners,
+được tái sử dụng. Round tiếp theo mới chạy SD; SD giữ enabled đến hết rollout. Compaction chọn cả history owners,
 padding và caches cùng thứ tự; sampler vẫn nhận thứ tự request gốc.
 
 Regression test đối chiếu rebuild với DraftModel source trực tiếp: hidden/logits/KV
@@ -59,16 +59,19 @@ bitwise khi cùng captured features. So target-only histories với target prefi
 
 `8_4_32` -> depth 8, K4, verification_num32, total_draft31.
 Không gọi native `get_adaptive_hyperparameters` trong TLT mode.
-Capacity được tính từ initial live batch × max configured verification_num;
-verification token/position/mask buffers và feedback capacity đủ worst case.
+Capacity được tính từ `min(initial live batch, TLT_BS_THRESHOLD)` × max verification_num.
+Scratch chỉ khởi tạo sau round pending transition, theo batch thực tế còn sống;
+target-only không tạo PackedTree, tree mask hoặc OPD scratch.
 Invalid candidate counts hoặc capacity override quá nhỏ fail rõ ràng; không clamp strategy.
 `BATCH_SIZE` là số prompts; live batch khởi đầu = `BATCH_SIZE * RESPONSES_PER_PROMPT`.
 
 BEG giữ sliding median, batch groups, exploration và stable acceptance length
 như FastRL. Reward = stable acceptance length × live batch / processing time.
-Timing boundary chung gồm proposal, verification, OPD feedback nếu bật, compaction
-và draft append/rebuild. Cả hai method synchronize ở cùng boundary; OPD async cost
-được tính. Đây là implementation ưu tiên correctness; chưa claim tối ưu throughput.
+Timing boundary speculative chung gồm proposal, verification, OPD feedback nếu bật,
+compaction và draft append. Dùng CUDA stream events và chỉ chờ event để đọc reward;
+không synchronize toàn device. Draft-only transition prefill đo riêng và nằm ngoài reward.
+Target-only dùng direct one-token target forward, sampler giữ nguyên và packet EOS/compaction.
+Metrics tách `effective_aal` (mọi round) và `speculative_aal` (chỉ SD). Đây là implementation ưu tiên correctness; chưa claim tối ưu throughput.
 
 ## Training và OPD
 
@@ -88,9 +91,14 @@ visited+frontier và teacher metadata của target sampler; không thêm target 
 Config diff kiểm tra mọi field ngoài OPD bằng nhau. Hai method dùng cùng checkpoint,
 prompts và thứ tự, seeds, sampling, batch, TLT/MAB và warmup/measured iterations.
 Physical order counterbalanced: even seed TLT trước, odd seed OPD trước.
+Production OPD mặc định `OPD_REQUIRE_CALIBRATED_PROFILE=1`; smoke có thể override `=0`.
+Tuner chỉ phủ tail workload `min(batch*responses, threshold)*max(strategy K)`.
 Default là frozen rollout; `BENCH_ONLINE_DRAFT=1`/`--online-draft` thêm đúng draft
 training sau mỗi rollout, giữ target frozen để đo draft pipeline. Training GRPO đầy
-đủ chạy qua hai train launchers.
+đủ chạy qua hai train launchers. `OPD_PROFILE=1`/`--profile` đo inclusive feature/proposal/feedback
+GPU cost bằng một frozen replay riêng; không tính replay vào wall time/peak memory đo chính.
+Đây là thời gian các OPD sections, không phải slowdown counterfactual. Chênh lệch wall time
+của ablation/pair cho biết effect end-to-end; giá trị chưa profile được ghi null, không bịa zero.
 
 Để controlled comparison, record baseline bằng `--method tlt`; lấy trace riêng ở
 `runs/batch<B>_seed<S>_lr<L>_stream<U>/tlt/strategy_trace.jsonl`. Set

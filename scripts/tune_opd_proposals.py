@@ -12,8 +12,20 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from helper.opd_profiles import (active_trials,context_shapes,execution_key,fingerprint,
     inspect_draft,profile_filename,discover_profile,validate_profile)
+from helper.tlt_scheduler import TLTConfig
 
 DEFAULT_MODELS=('qwen25_1p5b','qwen25_3b','qwen25_7b','qwen25_14b','qwen3_1p7b','qwen3_4b')
+
+
+def tail_workload(batch,responses,threshold,strategies,points=7):
+    config=TLTConfig.from_env()
+    from dataclasses import replace
+    config=replace(config,bs_threshold=threshold,strategies=strategies)
+    selected=config.validate()
+    live=min(batch*responses,threshold)
+    if live<1:raise ValueError('TLT threshold=0 never enables OPD; no proposal workload to tune')
+    k=max(s.k for s in selected)
+    return live,k,context_shapes(live,1,k,points)
 
 
 def measure(fn,iterations,torch):
@@ -103,6 +115,8 @@ def tune_models(args,*,hardware=None,benchmark_fn=benchmark_configuration,progre
         print('model -> detected V/r/dtype -> profile used')
         for m in skipped:print(f'{m["model"]} -> SKIPPED: {m["reason"]}')
         return dict(models=[],skipped=skipped,unique_configs=0)
+    live,k,default_shapes=tail_workload(args.batch_size,args.responses,args.tlt_bs_threshold,args.tlt_strategies,args.context_points)
+    maximum_contexts=live*k
     hardware=hardware or fingerprint();groups={}
     for model in models:
         key=execution_key(hardware,model['vocab'],model['rank'],model['dtype'],model['topk'])
@@ -120,13 +134,17 @@ def tune_models(args,*,hardware=None,benchmark_fn=benchmark_configuration,progre
         else:
             if path.exists() and not args.force:raise FileExistsError(f'{path}: use --force or a new profile path')
             shapes=([tuple(map(int,shape.split('x'))) for shape in args.shapes.split(',')] if args.shapes else
-                    context_shapes(args.batch_size,args.responses,args.max_draft_k,args.context_points))
+                    default_shapes)
             slots=(sorted({min(key['vocab'],key['vocab'] if x=='V' else int(x)) for x in args.slots.split(',')}) if args.slots else
                    active_trials(key['vocab'],key['topk'],args.active_points))
             if any(min(shape)<1 for shape in shapes) or min(slots)<0:raise ValueError('invalid workload')
             # Flat proposal workload, not duplicate b*c factorizations.
             shapes=[(n,1) for n in sorted({b*c for b,c in shapes})]
+            if any(n>maximum_contexts for n,c in shapes):
+                raise ValueError(f'tuner contexts exceed actual TLT tail region: max_live={live}, K={k}, max_contexts={maximum_contexts}')
             payload=benchmark_fn(key,shapes,slots,args.iterations,progress)
+            payload.setdefault('benchmark_metadata',{}).update(tlt_max_live=live,tlt_max_contexts=maximum_contexts,
+                tlt_strategies=args.tlt_strategies,active_id_pattern='seeded_sorted_randperm',seed=42)
             validate_profile(payload,key)
             payload['models_inspected']=group['models']
             path.parent.mkdir(parents=True,exist_ok=True)
@@ -148,6 +166,8 @@ def parse_args(argv=None):
     p.add_argument('--topk',type=int,default=16);p.add_argument('--shapes');p.add_argument('--slots')
     p.add_argument('--batch-size',type=int,default=8);p.add_argument('--responses',type=int,default=8)
     p.add_argument('--max-draft-k',type=int,default=8);p.add_argument('--context-points',type=int,default=7)
+    p.add_argument('--tlt-bs-threshold',type=int,default=int(os.getenv('TLT_BS_THRESHOLD','32')))
+    p.add_argument('--tlt-strategies',default=os.getenv('TLT_MAB_CONFIGS','8_4_48,8_4_32,8_4_16,8_4_8'))
     p.add_argument('--active-points',type=int,default=8);p.add_argument('--iterations',type=int,default=30)
     p.add_argument('--force',action='store_true');p.add_argument('--inspect-only',action='store_true')
     a=p.parse_args(argv)

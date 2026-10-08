@@ -60,10 +60,12 @@ def test_source_architecture_and_opd_are_exact_snapshots():
 def test_mapping_gating_capacity_and_no_native_adaptive_call():
     s=Strategy.parse('8_4_32');assert (s.depth,s.k,s.total_draft)==(8,4,31)
     gate=AdaptiveTail(32,3)
-    assert [gate.check(b) for b in [64,32,31,64,30,10,1,64]]==[False,False,False,False,False,False,True,True]
+    assert [gate.check(b) for b in [64,32,31,64,30,10,1]]==[False]*7
+    assert gate.pending and not gate.enabled
+    gate.complete_transition();assert gate.check(64)
     for n in (48,32,16,8):assert Strategy.parse(f'8_4_{n}').total_draft==n-1
     with pytest.raises(ValueError,match='available'):Strategy.parse('1_4_48')
-    sch=TLTScheduler();assert sch.start_rollout(64)==3072
+    sch=TLTScheduler();assert sch.start_rollout(64)==1536
     with pytest.raises(ValueError,match='no strategy clamping'):sch.start_rollout(64,160)
     tree=ast.parse((ROOT/'helper/tlt_generate.py').read_text())
     assert not any(isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='get_adaptive_hyperparameters' for n in ast.walk(tree))
@@ -75,6 +77,7 @@ def test_mab_selection_reward_metrics_reference_and_rng_state():
     configs='8_4_48,7_4_48,8_4_32,7_4_32,8_4_16,7_4_16,8_4_8,7_4_8'
     cfg=TLTConfig(warmup_checks=1,strategies=configs)
     s=TLTScheduler(cfg);s.start_rollout(32)
+    s.gate.check(32);s.gate.complete_transition()
     reference=ref.MABGroupManager(configs.split(','),'BEG',1000,[1,2,5,21])
     private=np.random.RandomState(42)
     for batch,accepted,seconds in [(32,1.,.003),(8,1.5,.005),(2,2.,.007),(1,3.,.010)]*8:
@@ -106,10 +109,10 @@ def test_off_never_initializes_opd_and_no_extra_target_forward(monkeypatch,famil
     assert model.opd_projector is None
     assert not hasattr(model,'_opd_runtime_cache')
     assert out['opd_backend']=='off'
-    assert min(drafts)==2
+    assert min(drafts)==3
     assert counts['target']==1+out['batch_verification_rounds']
-    assert out['tlt_target_only_rounds']==2 and out['tlt_sd_transition_count']==1
-    assert all(row['verification_num']==32 for row in out['tlt_strategy_trace'][2:])
+    assert out['tlt_target_only_rounds']==3 and out['tlt_sd_transition_count']==1
+    assert all(row['verification_num']==32 for row in out['tlt_strategy_trace'][3:])
 
 
 @CUDA
@@ -127,14 +130,14 @@ def test_transition_direct_prefix_hidden_logits_kv_parity(monkeypatch,family):
     out,counts,*_=run(model)
     assert len(captured)==1 and counts['target']==out['batch_verification_rounds']+1
     features,ids,padding,state,kv=captured[0]
-    # Two target-only steps appended to prompt features. Shifted ids end with
+    # Three target-only steps appended to prompt features. Shifted ids end with
     # already sampled target bonus; all earlier ids form the current prefix.
-    assert ids.shape==(4,5)
+    assert ids.shape==(4,6)
     from helper.modeling_draft import DraftModel
     config=deepcopy(model.target_model.config);config.num_hidden_layers=1
     direct=DraftModel(config).cuda();direct.load_state_dict(model.draft_model.state_dict());direct.eval()
     minimum=torch.finfo(model.dtype).min
-    mask=torch.triu(torch.full((5,5),minimum,device='cuda',dtype=model.dtype),diagonal=1)[None,None].repeat(4,1,1,1)
+    mask=torch.triu(torch.full((6,6),minimum,device='cuda',dtype=model.dtype),diagonal=1)[None,None].repeat(4,1,1,1)
     mask.masked_fill_(padding[:,None,None,:],minimum)
     with torch.inference_mode(),torch.amp.autocast('cuda',dtype=model.dtype):
         reference=direct(features,model.embed_tokens(ids),attention_mask=mask,position_ids=state['position_ids'],use_cache=True)
@@ -241,23 +244,60 @@ def test_finishing_compaction_preserves_transition_history(monkeypatch):
     assert all(len(x)==len(y) for x,y in zip(out['all_draft_input_ids'],out['all_draft_input_states']))
 
 
+def slow_reference():
+    path=ROOT/'tests/reference/tlt_generate_before_tail_fix.py'
+    spec=importlib.util.spec_from_file_location('tlt_slow_reference',path)
+    reference=importlib.util.module_from_spec(spec);spec.loader.exec_module(reference)
+    return reference
+
+
+class ReferenceScheduler(TLTScheduler):
+    def start_rollout(self,batch,*args,**kwargs):
+        super().start_rollout(batch,None,*args[1:],**kwargs)
+        self.capacity=batch*max(s.verification_num for s in self.strategies)
+        return self.capacity
+
+    def record(self,*args):
+        super().record(*args)
+        # Reference's draft prefill remains at the next round start, but the
+        # completed triggering round and next prefix now match revised TLT.
+        if self.gate.pending:self.gate.complete_transition()
+
+
 @CUDA
 @pytest.mark.parametrize('family',['qwen2','qwen3'])
-def test_fixed_tlt_strategy_matches_native_fastgrpo_verifier_tokens_rng_and_history(family):
-    from helper.fastgrpo_generate import speculative_generate as source_generate
-    cfg=TLTConfig(warmup_checks=1,strategies='3_2_7',buckets=(1,))
-    m=tiny(family)
-    torch.manual_seed(42)
-    with torch.inference_mode():
-        native=source_generate(m,torch.tensor([[0,7,9],[3,5,8]]),torch.tensor([[0,1,1],[1,1,1]]),
-            SimpleNamespace(eos_token_id=96),do_sample=True,repeated_generate_nums=2,max_length=18,
-            temperature=.8,top_p=.95,verification_capacity=28,max_verification_num=7,max_draft_k=2,
-            max_draft_token_length=3,min_draft_token_length=3,statistical_time=False,return_all_draft_input=True)
-    native_rng=torch.cuda.get_rng_state()
-    result,counts,rng,*_=run(tiny(family),config=cfg)
+@pytest.mark.parametrize('threshold',[0,32])
+def test_fast_path_and_transition_match_previous_verifier_tokens_rng_hidden_and_kv(monkeypatch,family,threshold):
+    from unittest.mock import patch
+    import helper.tlt_generate as runtime
+    cfg=TLTConfig(bs_threshold=threshold,warmup_checks=3)
+    reference=slow_reference()
+    captured={}
+    def execute(generate,model,scheduler,label):
+        target_masks=[];kv=[]
+        hook=model.target_model.model.layers[0].register_forward_pre_hook(lambda module,args,kw:target_masks.append(kw['attention_mask'].clone()),with_kwargs=True)
+        norm=model.target_model.model.norm.register_forward_hook(lambda *unused:kv.append([[x.clone() for x in layer] for layer in model._opd_target_kv_pool]))
+        original=generate._cache_set_layer
+        def observe(cache,idx,key,value):
+            original(cache,idx,key,value)
+        torch.manual_seed(42)
+        with patch.object(generate,'_cache_set_layer',observe):
+            out=generate.speculative_generate(model,torch.tensor([[0,7,9],[3,5,8]]),torch.tensor([[0,1,1],[1,1,1]]),
+                SimpleNamespace(eos_token_id=72),do_sample=True,repeated_generate_nums=2,max_length=18,
+                temperature=.8,top_p=.95,statistical_time=False,return_all_draft_input=True,
+                method='tlt',tlt_scheduler=scheduler)
+        hook.remove();norm.remove()
+        captured[label]=(out,torch.cuda.get_rng_state(),target_masks,kv)
+    execute(reference,tiny(family),ReferenceScheduler(cfg),'old')
+    execute(runtime,tiny(family),TLTScheduler(cfg),'new')
+    native,rng,masks,kv=captured['old'];result,new_rng,new_masks,new_kv=captured['new']
     assert native['generated_token_ids']==result['generated_token_ids']
-    assert torch.equal(native_rng,rng)
+    assert torch.equal(rng,new_rng)
     for key in ('all_draft_input_ids','all_draft_input_states'):
         for x,y in zip(native[key],result[key]):torch.testing.assert_close(x,y,rtol=0,atol=0)
+    for x,y in zip(masks,new_masks):torch.testing.assert_close(x,y,rtol=0,atol=0)
+    assert len(kv)==len(new_kv)
+    for old_round,new_round in zip(kv,new_kv):
+        for a,b in zip(old_round,new_round):
+            for x,y in zip(a,b):torch.testing.assert_close(x,y,rtol=0,atol=0)
     assert native['verification_batches']==result['verification_batches']
-    assert counts['target']==native['verification_batches']+1

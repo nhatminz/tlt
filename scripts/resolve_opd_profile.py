@@ -24,8 +24,12 @@ def main():
     path,payload=discover_profile(a.profile_dir,key,a.profile)
     if path is None and a.auto_tune=='1':
         from scripts.tune_opd_proposals import benchmark_configuration
+        from scripts.tune_opd_proposals import tail_workload
+        from helper.tlt_scheduler import TLTConfig
+        config=TLTConfig.from_env()
+        _,_,shapes=tail_workload(a.batch_size,a.responses,config.bs_threshold,config.strategies)
         with contextlib.redirect_stdout(sys.stderr):
-            payload=benchmark_configuration(key,context_shapes(a.batch_size,a.responses,a.max_draft_k),active_trials(key['vocab'],key['topk']),a.iterations)
+            payload=benchmark_configuration(key,shapes,active_trials(key['vocab'],key['topk']),a.iterations)
         validate_profile(payload,key)
         path=Path(a.profile_dir)/profile_filename(key);path.parent.mkdir(parents=True,exist_ok=True)
         temporary=path.with_suffix('.json.tmp');temporary.write_text(json.dumps(payload,indent=2)+'\n');temporary.replace(path)

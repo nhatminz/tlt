@@ -9,7 +9,6 @@ from helper.opd_history import ContiguousRolloutHistory as RolloutHistory
 from helper.tlt_scheduler import TLTScheduler
 from helper.tlt_workspace import TreeWorkspace
 from helper.tlt_transition import prefill_draft_prefix, enable_cached_draft
-from helper.tlt_timing import StreamTimer
 from helper.method_config import resolve_method
 from helper.opd_scheduling import schedule,compact_suffix_inplace
 from helper.opd_sampling import sample_target_with_metadata
@@ -160,12 +159,13 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
                     draft_attention_mask.masked_fill_(padding_positions_tensor[:,None,None,:draft_attention_mask.shape[-1]],min_dtype)
                 else:draft_attention_mask[padding_positions_tensor[:,0],0,:,padding_positions_tensor[:,1]]=min_dtype
             if statistical_time:
-                section_timer.begin()
+                torch.cuda.synchronize()
+                check_time_start = time.time()
             draft_outputs = model(hidden_states=next_feature_states, input_ids=draft_next_token, attention_mask=draft_attention_mask, use_cache=True, past_key_values=draft_past_key_values_tree, position_ids=draft_position_ids)
             draft_forward_count += 1
             if statistical_time:
-                section_timer.end()
-                total_check_time += section_timer.seconds()
+                torch.cuda.synchronize()
+                total_check_time += time.time() - check_time_start
             draft_past_key_values_tree = draft_outputs['past_key_values']
             draft_hidden_states = draft_outputs['hidden_states']
             next_feature_states = draft_outputs['next_feature_states']
@@ -244,6 +244,8 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
             if batch_indices:
                 attention_mask[batch_indices, 0, :, pos_indices] = min_dtype
         return attention_mask
+    if statistical_time:
+        torch.cuda.synchronize()
     start_time = time.perf_counter()
     static_kv=True
     max_retained_tokens=int(os.environ.get('OPD_KV_MAX_RETAINED_TOKENS','0'))
@@ -261,8 +263,11 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
     attention_workspace=getattr(model,'_opd_attention_workspace',None)
     if attention_workspace is None or attention_workspace.device!=torch.device(device):
         attention_workspace=AttentionWorkspace(device);model._opd_attention_workspace=attention_workspace
-    update_stream = None
+    update_stream = torch.cuda.Stream(device) if enabled and opd_update_stream and (torch.device(device).type == 'cuda') else None
     source_ready = update_done = None
+    if update_stream is not None:
+        source_ready = torch.cuda.Event()
+        update_done = torch.cuda.Event()
 
     def wait_for_opd_update():
         ticket = opd.begin('opd_wait_ms')
@@ -270,8 +275,7 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
         opd.end(ticket)
     verification_batches = active_response_rounds = verified_tree_nodes = 0
     prefill_time_start = time.time()
-    section_timer_prefill=StreamTimer(device)
-    if statistical_time: section_timer_prefill.begin()
+    target_time_start = time.time()
     global total_target_time, total_draft_time, total_check_time
     (total_target_time, total_draft_time, total_check_time) = (0, 0, 0)
     all_draft_input_states = None
@@ -299,8 +303,8 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
         target_hidden_states = target_outputs['target_hidden_state']
         target_logits = model.target_model.lm_head(target_hidden_states[:, -1:, :])
     if statistical_time:
-        section_timer_prefill.end()
-        total_target_time += section_timer_prefill.seconds()
+        torch.cuda.synchronize()
+        total_target_time += time.time() - target_time_start
     (target_next_token, _, prefill_metadata) = sample_target_with_metadata(target_logits, do_sample=do_sample, temperature=temperature, top_p=top_p, top_k=top_k, eos_token_id=eos_token_id)
     del _, prefill_metadata, target_logits
     draft_input_ids = torch.concat([input_ids[:, 1:], target_next_token], dim=-1)
@@ -345,44 +349,28 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
     response_accepted_length_sum = [0 for _ in range(bsz)]
     response_verification_rounds = [0 for _ in range(bsz)]
     vocabulary_ids = model.full_vocabulary_ids if enabled else None
-    speculative_capacity = 0
-    def initialize_speculation():
-        nonlocal opd, update_stream, source_ready, update_done, speculative_capacity
-        if opd is not None: return
-        speculative_capacity = bsz
-        if bsz > scheduler.max_live:
-            raise ValueError('TLT transition batch exceeds tail capacity')
-        if enabled:
-            from helper.opd_reflex import OPDReflex
-            cache = getattr(model, '_opd_runtime_cache', None)
-            if cache is None: cache={}; model._opd_runtime_cache=cache
-            key=(enabled,opd_rank,opd_topk,opd_fast_lr,opd_visited_weight,opd_frontier_weight,opd_profile,opd_diagnostics,opd_backend,opd_train_projector)
-            opd=cache.get(key)
-            if opd is None:
-                cache.clear()
-                opd=OPDReflex(opd_rank,opd_topk,opd_fast_lr,opd_visited_weight,opd_frontier_weight,
-                             opd_profile,opd_diagnostics,enabled,opd_backend,opd_train_projector)
-                cache[key]=opd
-            opd.start(model, bsz, vocabulary_ids, model.lm_head.weight.shape[1],
-                      max_contexts=1+max_draft_k*(max_draft_token_length-1),
-                      max_nodes=bsz*max_verification_num, max_path=max_draft_token_length+1,
-                      max_proposal_contexts=max_draft_k)
-            if opd_update_stream:
-                update_stream=torch.cuda.Stream(device)
-                source_ready=torch.cuda.Event();update_done=torch.cuda.Event()
-        else:
-            key=(str(device),bsz,max_draft_k,max_draft_token_length)
-            cached=getattr(model,'_tlt_tree_workspace',None)
-            if cached is None or cached[0]!=key:
-                cached=(key,TreeWorkspace(device,bsz,1+max_draft_k*(max_draft_token_length-1),max_draft_token_length,max_draft_k))
-                model._tlt_tree_workspace=cached
-            opd=cached[1]
-        opd.async_updates=update_stream is not None
-        attention_workspace.buffer('target_tokens',(bsz,max_verification_num),torch.long)
-        attention_workspace.buffer('target_positions',(bsz,max_verification_num),torch.long)
-        attention_workspace.buffer('tree_mask',(bsz*max_verification_num*mask_columns_capacity,),model.target_model.dtype)
-        model._opd_initial_batch=bsz;model._opd_max_path_capacity=max_draft_token_length+1
+    if enabled:
+        from helper.opd_reflex import OPDReflex
+        cache = getattr(model, '_opd_runtime_cache', None)
+        if cache is None:cache={};model._opd_runtime_cache=cache
+        key=(enabled,opd_rank,opd_topk,opd_fast_lr,opd_visited_weight,opd_frontier_weight,opd_profile,opd_diagnostics,opd_backend,opd_train_projector)
+        opd=cache.get(key)
+        if opd is None:
+            cache.clear()
+            opd=OPDReflex(opd_rank,opd_topk,opd_fast_lr,opd_visited_weight,opd_frontier_weight,
+                         opd_profile,opd_diagnostics,enabled,opd_backend,opd_train_projector)
+            cache[key]=opd
+        opd.start(model, bsz, vocabulary_ids, model.lm_head.weight.shape[1], max_contexts=1 + max_draft_k * (max_draft_token_length - 1), max_nodes=verification_capacity+bsz, max_path=max_draft_token_length + 1, max_proposal_contexts=max_draft_k)
+    else:
+        opd = TreeWorkspace(device, bsz, 1+max_draft_k*(max_draft_token_length-1), max_draft_token_length, max_draft_k)
+    opd.async_updates=update_stream is not None
     mask_columns_capacity = input_ids.shape[-1] + max_length * (max_draft_token_length + 1) + max_verification_num
+    # Reserve verification rows/mask for every configured strategy, including
+    # depth-8 trees. Native FastGRPO's total 160-row policy never participates.
+    attention_workspace.buffer('target_tokens',(initial_batch,max_verification_num),torch.long)
+    attention_workspace.buffer('target_positions',(initial_batch,max_verification_num),torch.long)
+    attention_workspace.buffer('tree_mask',(initial_batch*max_verification_num*mask_columns_capacity,),model.target_model.dtype)
+    model._opd_initial_batch=bsz;model._opd_max_path_capacity=max_draft_token_length+1
     pad_capacity=mask_columns_capacity
     pad_mask=getattr(model,'_opd_padding_workspace',None)
     if pad_mask is None or pad_mask.shape!=(bsz,pad_capacity) or pad_mask.device!=torch.device(device):
@@ -406,158 +394,116 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
         if enabled and strategy is not None:
             return opd.prepare_compact_teacher(feedback_tree,feedback_path,probs if do_sample else tokens,sorted_metadata,greedy=not do_sample)
         return None
-    round_timer=StreamTimer(device)
-    transition_timer=StreamTimer(device)
-    section_timer=StreamTimer(device) if statistical_time else None
-    opd_timer=StreamTimer(device) if enabled and opd_profile else None
-    opd_intervals=[]
     for token_num in range(1, max_length):
+        # Identical end-to-end reward boundary. Synchronize BOTH modes; async
+        # feedback work is included before the ending timestamp as well.
+        torch.cuda.synchronize(device)
         round_begin = time.perf_counter()
         strategy = scheduler.select(bsz)
         if strategy is not None:
-            # Prefill has already finished after the triggering target-only
-            # round. Start MAB interval strictly AFTER the transition event.
-            round_timer.begin()
-            draft_token_length,draft_k,draft_total_token=strategy.depth,strategy.k,strategy.total_draft
-            if draft_past_key_values is None: raise RuntimeError('SD enabled without draft-only prefill')
+            draft_token_length, draft_k, draft_total_token = strategy.depth, strategy.k, strategy.total_draft
+            if draft_past_key_values is None:
+                transition_begin = time.perf_counter()
+                length = history.lengths['features']
+                rebuilt = prefill_draft_prefix(model,
+                    history.buffers['features'][:,:length].index_select(0,owners),
+                    history.buffers['input_ids'][:,:length].index_select(0,owners),
+                    padding_positions_tensor[:,:length], last_valid=last_history_index)
+                draft_forward_count += 1
+                draft_past_key_values = rebuilt['past_key_values']
+                draft_hidden_states = rebuilt['hidden_states']
+                next_feature_states = rebuilt['next_feature_states']
+                torch.cuda.synchronize(device)
+                scheduler.transition_count += 1
+                scheduler.transition_prefill_s += time.perf_counter()-transition_begin
             with torch.amp.autocast(str(model.target_model.device), dtype=torch.bfloat16 if model.dtype == torch.bfloat16 else torch.float16):
-                outputs=draft_generate(model,next_feature_states,draft_hidden_states,draft_past_key_values,
-                    draft_token_length,past_position_ids_tensor,padding_positions_tensor,
-                    draft_k=draft_k,draft_total_token=draft_total_token)
-            tensor_tree=outputs['tensor_tree'];next_token_trees=outputs['next_token_trees']
-            target_position_ids=outputs['target_position_ids'];draft_trees=[]
+                outputs = draft_generate(model, next_feature_states, draft_hidden_states, draft_past_key_values,
+                    draft_token_length, past_position_ids_tensor, padding_positions_tensor,
+                    draft_k=draft_k, draft_total_token=draft_total_token)
+            tensor_tree = outputs['tensor_tree']; next_token_trees = outputs['next_token_trees']
+            target_position_ids = outputs['target_position_ids']; draft_trees = []
         else:
-            draft_total_token=0
+            draft_total_token = 0; draft_trees = []
+            root = torch.full((bsz,1),-1,device=device,dtype=torch.long)
+            tensor_tree = PackedTree(root, root.clone(), root.clone(), 0)
+            next_token_trees = root[:,:0];target_position_ids = root[:,:0]
         def finish_round():
-            if strategy is not None:
-                if update_stream is not None: wait_for_opd_update()
-                round_timer.end()
-                seconds=round_timer.seconds()
-            else:
-                # Host EOS scheduling already requires a tiny D2H packet.
-                # No timing wait is added to target-only decode.
-                seconds=time.perf_counter()-round_begin
-            scheduler.record(acc_length,max(seconds,1e-9))
-        def rebuild_pending_transition():
-            nonlocal draft_past_key_values,draft_hidden_states,next_feature_states,draft_forward_count
-            if not scheduler.gate.pending: return
-            transition_timer.begin()
-            length=history.lengths['features']
-            rebuilt=prefill_draft_prefix(model,
-                history.buffers['features'][:,:length].index_select(0,owners),
-                history.buffers['input_ids'][:,:length].index_select(0,owners),
-                padding_positions_tensor[:,:length],last_valid=last_history_index)
-            draft_forward_count+=1
-            draft_past_key_values=rebuilt['past_key_values']
-            draft_hidden_states=rebuilt['hidden_states'];next_feature_states=rebuilt['next_feature_states']
-            transition_timer.end()
-            scheduler.transition_prefill_s+=transition_timer.seconds()
-            scheduler.transition_count+=1
-            initialize_speculation()
-            scheduler.gate.complete_transition()
+            if update_stream is not None and strategy is not None:
+                wait_for_opd_update()
+            torch.cuda.synchronize(device)
+            scheduler.record(acc_length, time.perf_counter()-round_begin)
         past_kv_len = _cache_seq_length(target_past_key_values)
         kv_length = past_kv_len + draft_total_token + 1
         q_length = draft_total_token + 1
-        if strategy is not None and bsz*q_length > verification_capacity:
+        if bsz*q_length > verification_capacity:
             raise ValueError('TLT verification rows exceed allocated capacity')
         verification_batches += 1
         active_response_rounds += bsz
         verified_tree_nodes += bsz * q_length
-        if strategy is None:
-            # Direct target-only decode: exactly one target token, no PackedTree,
-            # path extraction, tree masks or speculative proposal workspaces.
-            target_attention_mask=attention_workspace.causal('target_only',past_kv_len,1,bsz,
-                model.target_model.dtype,padding_positions_tensor)
-            target_position_ids=(past_position_ids_tensor+1)[:,None]
-            with torch.amp.autocast(str(model.target_model.device), dtype=torch.bfloat16 if model.dtype == torch.bfloat16 else torch.float16):
-                target_outputs=model_forward(model.target_model,target_next_token,target_attention_mask,
-                    target_past_key_values,target_position_ids)
-                feature_states_tree=target_hidden_states_tree=target_outputs['last_hidden_state']
-                head_input=target_hidden_states_tree if canonical_to_physical is None else target_hidden_states_tree.index_select(0,canonical_to_physical)
-                logits=model.target_model.lm_head(head_input)
-                sampled,_,_=sample_target_with_metadata(logits,do_sample=do_sample,temperature=temperature,
-                    top_p=top_p,top_k=top_k,eos_token_id=eos_token_id,return_probs=False)
-                next_token=sampled if physical_to_canonical is None else sampled.index_select(0,physical_to_canonical)
-                del logits,head_input
-            # Same required scheduling boundary as the previous root-only tree.
-            finished=next_token.eq(eos_token_id)[:,0].cpu().tolist()
-            scheduling_packet=[[1,int(done),1,-1] for done in finished]
-            chosen_index=torch.full((bsz,1),past_kv_len,device=device,dtype=torch.long)
-            newly_padded=torch.zeros((bsz,1),device=device,dtype=torch.bool)
-            last_valid_index=torch.zeros((bsz,1),device=device,dtype=torch.long)
-            max_acc_length=1
-            target_sampling_probs=sampling_metadata=None
-        else:
-            target_trees = draft_trees
-            tree_inputs=attention_workspace.buffer('target_tokens',(bsz,q_length),torch.long)
-            tree_inputs[:,:1].copy_(target_next_token);tree_inputs[:,1:].copy_(next_token_trees)
-            next_token_trees=tree_inputs
-            positions_out=attention_workspace.buffer('target_positions',(bsz,q_length),torch.long)
-            torch.add(target_position_ids,2,out=positions_out[:,1:])
-            torch.add(past_position_ids_tensor,1,out=positions_out[:,0])
-            target_position_ids=positions_out
-            min_dtype = torch.finfo(model.target_model.dtype).min
-            tree_mask_workspace=attention_workspace.buffer('tree_mask',(bsz*q_length*kv_length,),model.target_model.dtype)
-            target_attention_mask = tensor_tree.attention_mask(past_kv_len, model.target_model.dtype, kernels=opd._kernels, workspace=tree_mask_workspace)
-            indices = []
-            if indices:
-                indices = torch.tensor(indices, dtype=torch.int16).to(device).long()
-                target_attention_mask[indices[:, 0], 0, indices[:, 1], indices[:, 2]] = 0
-            if isinstance(padding_positions_tensor, torch.Tensor):
-                target_attention_mask.masked_fill_(padding_positions_tensor[:,None,None,:kv_length],min_dtype)
-            transfer_thread = None
-            if statistical_time:
-                target_time_start = StreamTimer(device)
-                target_time_start.begin()
-            with torch.amp.autocast(str(model.target_model.device), dtype=torch.bfloat16 if model.dtype == torch.bfloat16 else torch.float16):
-                target_outputs = model_forward(model.target_model, input_ids=next_token_trees, attention_mask=target_attention_mask, past_key_values=target_past_key_values, position_ids=target_position_ids)
-                target_past_key_values = target_outputs['past_key_values']
-                feature_states_tree = target_outputs['last_hidden_state']
-                target_hidden_states_tree = target_outputs['target_hidden_state']
-                # Native sampler must see original response order, even when KV
-                # physical rows swap-remove. Gather H-sized head INPUT, not [N,V]
-                # logits/probs. No additional head/transformer forward.
-                head_input=target_hidden_states_tree if canonical_to_physical is None else target_hidden_states_tree.index_select(0,canonical_to_physical)
-                target_outputs_logits = model.target_model.lm_head(head_input)
-                del head_input
-                feedback_tree=tensor_tree if canonical_to_physical is None else PackedTree(
-                    *[x.index_select(0,canonical_to_physical) for x in (tensor_tree.parents,tensor_tree.tokens,tensor_tree.feedback_contexts)],tensor_tree.max_depth)
-                opd.feedback_row_map=canonical_to_physical
-                path=None
-                (target_next_token_tree, target_sampling_probs, sampling_metadata) = sample_target_with_metadata(target_outputs_logits, do_sample=do_sample, temperature=temperature, top_p=top_p, top_k=top_k, eos_token_id=eos_token_id,metadata_builder=compact_teacher_metadata,return_probs=False)
-                del target_outputs_logits
-            if statistical_time:
-                target_time_start.end()
-                total_target_time += target_time_start.seconds()
-            if path is None:
-                path = trace_verified_path(tensor_tree, target_next_token_tree, eos_token_id, kernels=opd._kernels, workspace=opd.path_workspace)
-            if enabled and strategy is not None:
-                if opd_timer is not None: opd_timer.begin()
-                teacher = None # compact metadata owns every teacher coordinate needed
-                if update_stream is not None:
-                    source_ready.record(torch.cuda.current_stream(device))
-                    update_stream.wait_event(source_ready)
-                    for shared in (feedback_tree.parents, feedback_tree.feedback_contexts):
-                        shared.record_stream(update_stream)
-                    if canonical_to_physical is not None:canonical_to_physical.record_stream(update_stream)
-                    if sampling_metadata is not None:
-                        for shared in sampling_metadata:shared.record_stream(update_stream)
-                    with torch.cuda.stream(update_stream):
-                        opd.feedback(feedback_tree, feedback_path, teacher, greedy=not do_sample,sampling_metadata=sampling_metadata)
-                        update_done.record(update_stream)
-                else:
+        target_trees = draft_trees
+        tree_inputs=attention_workspace.buffer('target_tokens',(bsz,q_length),torch.long)
+        tree_inputs[:,:1].copy_(target_next_token);tree_inputs[:,1:].copy_(next_token_trees)
+        next_token_trees=tree_inputs
+        positions_out=attention_workspace.buffer('target_positions',(bsz,q_length),torch.long)
+        torch.add(target_position_ids,2,out=positions_out[:,1:])
+        torch.add(past_position_ids_tensor,1,out=positions_out[:,0])
+        target_position_ids=positions_out
+        min_dtype = torch.finfo(model.target_model.dtype).min
+        tree_mask_workspace=attention_workspace.buffer('tree_mask',(bsz*q_length*kv_length,),model.target_model.dtype)
+        target_attention_mask = tensor_tree.attention_mask(past_kv_len, model.target_model.dtype, kernels=opd._kernels, workspace=tree_mask_workspace)
+        indices = []
+        if indices:
+            indices = torch.tensor(indices, dtype=torch.int16).to(device).long()
+            target_attention_mask[indices[:, 0], 0, indices[:, 1], indices[:, 2]] = 0
+        if isinstance(padding_positions_tensor, torch.Tensor):
+            target_attention_mask.masked_fill_(padding_positions_tensor[:,None,None,:kv_length],min_dtype)
+        transfer_thread = None
+        if statistical_time:
+            torch.cuda.synchronize()
+            target_time_start = time.time()
+        with torch.amp.autocast(str(model.target_model.device), dtype=torch.bfloat16 if model.dtype == torch.bfloat16 else torch.float16):
+            target_outputs = model_forward(model.target_model, input_ids=next_token_trees, attention_mask=target_attention_mask, past_key_values=target_past_key_values, position_ids=target_position_ids)
+            target_past_key_values = target_outputs['past_key_values']
+            feature_states_tree = target_outputs['last_hidden_state']
+            target_hidden_states_tree = target_outputs['target_hidden_state']
+            # Native sampler must see original response order, even when KV
+            # physical rows swap-remove. Gather H-sized head INPUT, not [N,V]
+            # logits/probs. No additional head/transformer forward.
+            head_input=target_hidden_states_tree if canonical_to_physical is None else target_hidden_states_tree.index_select(0,canonical_to_physical)
+            target_outputs_logits = model.target_model.lm_head(head_input)
+            del head_input
+            feedback_tree=tensor_tree if canonical_to_physical is None else PackedTree(
+                *[x.index_select(0,canonical_to_physical) for x in (tensor_tree.parents,tensor_tree.tokens,tensor_tree.feedback_contexts)],tensor_tree.max_depth)
+            opd.feedback_row_map=canonical_to_physical
+            path=None
+            (target_next_token_tree, target_sampling_probs, sampling_metadata) = sample_target_with_metadata(target_outputs_logits, do_sample=do_sample, temperature=temperature, top_p=top_p, top_k=top_k, eos_token_id=eos_token_id,metadata_builder=compact_teacher_metadata,return_probs=False)
+            del target_outputs_logits
+        if statistical_time:
+            torch.cuda.synchronize()
+            total_target_time += time.time() - target_time_start
+        if path is None:
+            path = trace_verified_path(tensor_tree, target_next_token_tree, eos_token_id, kernels=opd._kernels, workspace=opd.path_workspace)
+        if enabled and strategy is not None:
+            teacher = None # compact metadata owns every teacher coordinate needed
+            if update_stream is not None:
+                source_ready.record(torch.cuda.current_stream(device))
+                update_stream.wait_event(source_ready)
+                for shared in (feedback_tree.parents, feedback_tree.feedback_contexts):
+                    shared.record_stream(update_stream)
+                if canonical_to_physical is not None:canonical_to_physical.record_stream(update_stream)
+                if sampling_metadata is not None:
+                    for shared in sampling_metadata:shared.record_stream(update_stream)
+                with torch.cuda.stream(update_stream):
                     opd.feedback(feedback_tree, feedback_path, teacher, greedy=not do_sample,sampling_metadata=sampling_metadata)
-                # record_stream above keeps asynchronous readers safe. Drop this
-                # alias too, otherwise previous-round full probs survive until the
-                # NEXT sampler has already allocated its full-vocabulary arrays.
-                if opd_timer is not None:
-                    stop=torch.cuda.Event(enable_timing=True)
-                    stop.record(update_stream if update_stream is not None else torch.cuda.current_stream(device))
-                    opd_intervals.append((opd_timer.start,stop))
-                    opd_timer=StreamTimer(device)
-                del teacher
-            scheduling_packet,next_token,chosen_index,newly_padded,last_valid_index,max_acc_length=schedule(
-                path,past_kv_len,eos_token_id,opd.padded_path_workspace,opd.scheduling_packet,opd._kernels,opd=opd)
+                    update_done.record(update_stream)
+            else:
+                opd.feedback(feedback_tree, feedback_path, teacher, greedy=not do_sample,sampling_metadata=sampling_metadata)
+            # record_stream above keeps asynchronous readers safe. Drop this
+            # alias too, otherwise previous-round full probs survive until the
+            # NEXT sampler has already allocated its full-vocabulary arrays.
+            del teacher
+        scheduling_packet,next_token,chosen_index,newly_padded,last_valid_index,max_acc_length=schedule(
+            path,past_kv_len,eos_token_id,opd.padded_path_workspace,opd.scheduling_packet,opd._kernels,opd=opd)
         acc_length=[row[0] for row in scheduling_packet]
         end_sig=[row[1] for row in scheduling_packet]
         for idx_tree,length in enumerate(acc_length):
@@ -580,7 +526,7 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
         target_next_token = next_token.gather(index=last_valid_index, dim=-1)
         (B, T, D) = feature_states_tree.shape
         feature_states_index = feature_states_index.unsqueeze(-1).expand(B, -1, D)
-        feature_states = feature_states_tree if strategy is None else feature_states_tree.gather(dim=1, index=feature_states_index)
+        feature_states = feature_states_tree.gather(dim=1, index=feature_states_index)
         target_hidden_states = feature_states
         # Gathered accepted features own storage; release whole-tree activations
         # before the next target forward, not after its new outputs are allocated.
@@ -600,7 +546,7 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
             finish_round()
             break
         if finished_indices:
-            compaction_timer=opd.begin('kv_batch_compaction_ms') if opd is not None else None
+            compaction_timer=opd.begin('kv_batch_compaction_ms')
             keep_rows,move_sources,move_destinations=swap_remove_plan(end_sig)
             keep = torch.tensor(keep_rows, device=device, dtype=torch.long)
             sources=torch.tensor(move_sources,device=device,dtype=torch.long)
@@ -624,7 +570,7 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
             if draft_past_key_values is not None:
                 draft_past_key_values.swap_remove(len(keep_rows),sources,destinations)
             last_history_index = last_history_index.index_select(0,keep)
-            if opd is not None: opd.end(compaction_timer)
+            opd.end(compaction_timer)
             next_token = next_token.index_select(0, keep)
             newly_padded=newly_padded.index_select(0,keep)
             target_next_token = target_next_token.index_select(0, keep)
@@ -639,54 +585,48 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
                 inverse=[0]*bsz
                 for canonical,physical in enumerate(order):inverse[physical]=canonical
                 physical_to_canonical=torch.tensor(inverse,device=device,dtype=torch.long)
-        if strategy is not None:
-            extension = min(row[2] for row in scheduling_packet if row[1]==0)
-            prefix_length = min(_cache_seq_length(target_past_key_values), past_kv_len + extension)
-            full_chosen_length = past_kv_len + max_acc_length
-            # OPD ONLY. Historical baseline retains its original stacked gather.
-            compaction_timer=opd.begin('kv_suffix_compaction_ms') if opd is not None else None
-            for layer in range(_cache_num_layers(target_past_key_values)):
-                key,value=_cache_get_layer(target_past_key_values,layer)
-                key,value=compact_suffix_inplace(key,value,chosen_index,past_kv_len,extension,model)
-                _cache_set_layer(target_past_key_values,layer,key,value)
-                del key,value  # do not pin a previous pool view across geometric grow
-            target_past_key_values.crop(full_chosen_length)
-            if opd is not None: opd.end(compaction_timer)
+        extension = min(row[2] for row in scheduling_packet if row[1]==0)
+        prefix_length = min(_cache_seq_length(target_past_key_values), past_kv_len + extension)
+        full_chosen_length = past_kv_len + max_acc_length
+        # OPD ONLY. Historical baseline retains its original stacked gather.
+        compaction_timer=opd.begin('kv_suffix_compaction_ms')
+        for layer in range(_cache_num_layers(target_past_key_values)):
+            key,value=_cache_get_layer(target_past_key_values,layer)
+            key,value=compact_suffix_inplace(key,value,chosen_index,past_kv_len,extension,model)
+            _cache_set_layer(target_past_key_values,layer,key,value)
+            del key,value  # do not pin a previous pool view across geometric grow
+        target_past_key_values.crop(full_chosen_length)
+        opd.end(compaction_timer)
         if draft_past_key_values is not None:
             draft_attention_mask = get_attention_mask(draft_past_key_values[0][0].shape[-2], max_acc_length, model.dtype, bsz, padding_positions=padding_positions_tensor)
             assert _cache_seq_length(target_past_key_values)==draft_past_key_values[0][0].shape[-2]+max_acc_length
-        if strategy is None:
-            # No padding/gaps can be created by a single committed target token.
-            past_position_ids_tensor.add_(1)
-        else:
-            draft_position_ids=attention_workspace.buffer('draft_positions',(bsz,max_acc_length),torch.long)
-            torch.cumsum(~newly_padded,1,out=draft_position_ids)
-            draft_position_ids.add_(past_position_ids_tensor[:,None])
-            past_position_ids_tensor=attention_workspace.buffer('past_positions',(bsz,),torch.long)
-            past_position_ids_tensor.copy_(draft_position_ids[:,-1])
+        draft_position_ids=attention_workspace.buffer('draft_positions',(bsz,max_acc_length),torch.long)
+        torch.cumsum(~newly_padded,1,out=draft_position_ids)
+        draft_position_ids.add_(past_position_ids_tensor[:,None])
+        past_position_ids_tensor=attention_workspace.buffer('past_positions',(bsz,),torch.long)
+        past_position_ids_tensor.copy_(draft_position_ids[:,-1])
         if draft_past_key_values is not None:
             if statistical_time:
-                draft_time_start = StreamTimer(device)
-                draft_time_start.begin()
+                torch.cuda.synchronize()
+                draft_time_start = time.time()
             with torch.amp.autocast(str(model.target_model.device), dtype=torch.bfloat16 if model.dtype == torch.bfloat16 else torch.float16):
                 if statistical_time:
-                    check_time_start = StreamTimer(device)
-                    check_time_start.begin()
+                    torch.cuda.synchronize()
+                    check_time_start = time.time()
                 draft_outputs = model(hidden_states=feature_states.to(model.dtype), input_ids=next_token, attention_mask=draft_attention_mask, use_cache=True, position_ids=draft_position_ids, past_key_values=draft_past_key_values)
                 draft_forward_count += 1
                 if statistical_time:
-                    check_time_start.end()
-                    total_check_time += check_time_start.seconds()
+                    torch.cuda.synchronize()
+                    total_check_time += time.time() - check_time_start
                 draft_past_key_values = draft_outputs['past_key_values']
                 (B, S, D) = draft_outputs['hidden_states'].shape
                 last_valid_index = last_valid_index.unsqueeze(-1).expand(-1, -1, D)
                 draft_hidden_states = draft_outputs['hidden_states'].gather(index=last_valid_index, dim=1)
                 next_feature_states = draft_outputs['next_feature_states'].gather(index=last_valid_index, dim=1)
             if statistical_time:
-                draft_time_start.end()
-                total_draft_time += draft_time_start.seconds()
+                torch.cuda.synchronize()
+                total_draft_time += time.time() - draft_time_start
         finish_round()
-        rebuild_pending_transition()
     post_time_start = time.time()
     padding_cpu=pad_mask[:,:max_recorded_pad_column].cpu()
     padding_positions_dict={str(row):set(torch.nonzero(mask,as_tuple=False).flatten().tolist())
@@ -745,28 +685,20 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
         filtered_generated_token_ids.append(sequence_without_padding)
         max_sequence_length = max(max_sequence_length, len(sequence_without_padding))
     draft_acceptance_rate = total_accepted_draft_tokens / max(total_proposed_draft_tokens, 1)
-    opd_statistics = opd.finish() if opd is not None else {'opd_backend':'off'}
-    if opd is not None: opd.clear()
+    opd_statistics = opd.finish()
+    opd.clear()
     result = {'generated_token_ids': filtered_generated_token_ids, 'max_sequence_length': max_sequence_length, 'total_acc_length': avg_acc_length[0], 'total_acc': max_sequence_length / token_num, 'total_decoded_token_num': avg_acc_length[1], 'total_accepted_draft_tokens': total_accepted_draft_tokens, 'total_proposed_draft_tokens': total_proposed_draft_tokens, 'total_accepted_medusa_tokens': total_accepted_draft_tokens, 'total_proposed_medusa_tokens': total_proposed_draft_tokens, 'draft_acceptance_rate': draft_acceptance_rate, 'medusa_acceptance_rate': draft_acceptance_rate, 'total_time_cost': time.perf_counter() - start_time, 'target_time_cost': total_target_time, 'draft_time_cost': total_draft_time, 'check_time_cost': total_check_time, 'prefill_time_cost': total_prefill_time, 'post_time_cost': time.time() - post_time_start, 'all_draft_input_states': all_draft_input_states, 'all_draft_input_ids': all_draft_input_ids, 'response_accepted_length_sum': response_accepted_length_sum, 'response_verification_rounds': response_verification_rounds, 'response_generated_tokens': [len(item) for item in filtered_generated_token_ids], 'batch_verification_rounds': verification_batches, 'verification_batches': verification_batches, 'active_response_rounds': active_response_rounds, 'verified_tree_nodes': verified_tree_nodes}
     result.update(opd_statistics)
     result.update(scheduler.finish())
     result.update(target_forwards=target_forward_count,draft_forwards=draft_forward_count,
                   no_extra_target_forward=target_forward_count==1+verification_batches)
-    result['opd_host_syncs']=opd.host_sync_count if opd is not None else 0
-    result['opd_host_syncs_per_round']=result['opd_host_syncs']/max(verification_batches,1)
+    result['opd_host_syncs']=opd.host_sync_count
+    result['opd_host_syncs_per_round']=opd.host_sync_count/max(verification_batches,1)
     if static_kv:
         for prefix,cache in (('target',target_past_key_values),('draft',draft_past_key_values)):
             if cache is None: continue
             result.update({f'opd_{prefix}_{key}':value for key,value in cache.statistics().items()})
             cache.end_rollout(max_retained_tokens)
-    result['opd_attention_workspace_bytes']=attention_workspace.memory_bytes()+(opd.attention_workspace.memory_bytes() if opd is not None else 0)
-    result['tlt_speculative_workspace_batch']=speculative_capacity
-    feedback_ms=sum(start.elapsed_time(stop) for start,stop in opd_intervals)
-    sections=opd_statistics.get('opd_profile_sections_ms') or {}
-    result['opd_feedback_ms']=feedback_ms if opd_intervals else (0. if not enabled else None)
-    # Inclusive proposal + feature + feedback cost, not a counterfactual
-    # slowdown. Net OPD effect comes from matched ablation wall-time reports.
-    result['opd_overhead_ms']=(feedback_ms+sections.get('opd_feature_ms',0.)+sections.get('proposal_ms',0.)) if opd_intervals else (0. if not enabled else None)
-    result['opd_overhead_measured']=bool(opd_intervals)
+    result['opd_attention_workspace_bytes']=attention_workspace.memory_bytes()+opd.attention_workspace.memory_bytes()
     result['total_time_cost']=time.perf_counter()-start_time
     return result

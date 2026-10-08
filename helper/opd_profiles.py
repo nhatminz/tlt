@@ -27,7 +27,7 @@ def fingerprint(device=None):
     for name in ('opd_reflex_kernels.py','tree_kernels.py'):
         digest.update(name.encode());digest.update((ROOT/'helper'/name).read_bytes())
     execution=hashlib.sha256()
-    for name in ('tlt_generate.py','tlt_transition.py','tlt_scheduler.py','tlt_workspace.py',
+    for name in ('tlt_generate.py','tlt_transition.py','tlt_scheduler.py','tlt_workspace.py','tlt_timing.py',
                  'fastgrpo_model.py','opd_generate.py','opd_reflex.py','opd_sampling.py',
                  'opd_static_cache.py','tree_verification.py'):
         execution.update(name.encode());execution.update((ROOT/'helper'/name).read_bytes())

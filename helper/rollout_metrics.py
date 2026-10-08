@@ -8,12 +8,14 @@ OPD_FIELDS=('kl','selected_states','visited_states','frontier_states',
     'sparse_rounds','dense_rounds','fused_rounds','gemm_rounds')
 KV_FIELDS=('iter_host_syncs','iter_host_syncs_per_round','iter_kv_cache_bytes',
            'iter_kv_full_reallocations','iter_kv_full_history_copies','iter_kv_history_copy_bytes','iter_kv_rows_moved','iter_kv_pool_allocations')
-TLT_FIELDS=('target_only_rounds','speculative_rounds','sd_transition_count','transition_draft_prefill_s')
+TLT_FIELDS=('target_only_rounds','speculative_rounds','sd_transition_count','transition_draft_prefill_s',
+            'speculative_accepted_length','speculative_response_rounds')
 FIELDS=('global_iter','epoch','batch_iter','method','grpo_step','used_items','eligible_prompts','total_prompts',
     'iter_draft_feature_loss','iter_draft_distribution_loss','iter_draft_total_loss',
     'iter_aal','cumulative_aal','iter_generation_time_s','cumulative_generation_time_s','cumulative_wall_time_s',
     'iter_rollout_tokens','cumulative_rollout_tokens','iter_verification_rounds','cumulative_verification_rounds',
-    'iter_acceptance_rate','cumulative_acceptance_rate','iter_target_forwards','iter_draft_forwards')+tuple('iter_opd_'+s for s in OPD_FIELDS)+KV_FIELDS+tuple('iter_tlt_'+s for s in TLT_FIELDS)
+    'iter_acceptance_rate','cumulative_acceptance_rate','iter_target_forwards','iter_draft_forwards',
+    'iter_effective_aal','iter_speculative_aal','cumulative_speculative_aal','iter_opd_overhead_ms')+tuple('iter_opd_'+s for s in OPD_FIELDS)+KV_FIELDS+tuple('iter_tlt_'+s for s in TLT_FIELDS)
 
 
 class RolloutMetricsWriter:
@@ -88,6 +90,10 @@ class RolloutMetricsWriter:
         for field in TLT_FIELDS:row['iter_tlt_'+field]=o.get('tlt_'+field,0)
         row['iter_target_forwards']=o.get('target_forwards','')
         row['iter_draft_forwards']=o.get('draft_forwards','')
+        row['iter_effective_aal']=row['iter_aal']
+        row['iter_speculative_aal']=ratio(o.get('tlt_speculative_accepted_length',0),o.get('tlt_speculative_response_rounds',0))
+        row['cumulative_speculative_aal']=ratio(self.state['tlt_speculative_accepted_length'],self.state['tlt_speculative_response_rounds'])
+        row['iter_opd_overhead_ms']=o.get('opd_overhead_ms','')
         if self.method in ('fastgrpo','opd_reflex','tlt','tlt_opd_reflex'):
             row['iter_host_syncs']=o.get('opd_host_syncs',0)
             row['iter_host_syncs_per_round']=o.get('opd_host_syncs_per_round',0)

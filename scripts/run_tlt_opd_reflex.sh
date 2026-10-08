@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export METHOD=tlt_opd_reflex
+export OPD_REQUIRE_CALIBRATED_PROFILE="${OPD_REQUIRE_CALIBRATED_PROFILE:-1}"
 export MODEL_KEY="${MODEL_KEY:-qwen25_3b}"
 export DATASET="${DATASET:-simplelr}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"

@@ -71,12 +71,20 @@ class AdaptiveTail:
         self.threshold, self.warmup = threshold, warmup
         self.consecutive = 0
         self.enabled = False
+        self.pending = False
 
     def check(self, batch):
         if self.enabled: return True
+        if self.pending: return False
         self.consecutive = self.consecutive + 1 if batch <= self.threshold else 0
-        self.enabled = self.consecutive >= self.warmup
-        return self.enabled
+        self.pending = self.consecutive >= self.warmup
+        # FastRL: threshold-triggering batch still decodes target-only.
+        return False
+
+    def complete_transition(self):
+        if not self.pending: raise ValueError('no pending TLT transition')
+        self.pending = False
+        self.enabled = True
 
 
 class TLTScheduler:
@@ -111,9 +119,10 @@ class TLTScheduler:
         self.trace = []
         self.transition_count = 0
         self.transition_prefill_s = 0.
-        self.capacity = batch * max(s.verification_num for s in self.strategies)
+        self.max_live = min(batch, self.config.bs_threshold)
+        self.capacity = self.max_live * max(s.verification_num for s in self.strategies)
         if verification_capacity is not None and verification_capacity < self.capacity:
-            raise ValueError(f'TLT requires verification_capacity>={self.capacity} for batch {batch}; got {verification_capacity}; no strategy clamping')
+            raise ValueError(f'TLT requires verification_capacity>={self.capacity} for tail batch {self.max_live}; got {verification_capacity}; no strategy clamping')
         if vocab is not None and max(s.k for s in self.strategies) > vocab:
             raise ValueError('TLT K exceeds full target vocabulary')
         if proposal_topk is not None and max(s.k for s in self.strategies) > proposal_topk:
@@ -152,6 +161,8 @@ class TLTScheduler:
                 reward = stable * row['batch_size'] / processing_time
                 self.manager.record_strategy_metrics(row['batch_size'], row['strategy'], reward, aal)
         row.update(aal=aal, processing_time_s=processing_time, reward=reward)
+        row['timing_basis']='cuda_stream_events' if row['strategy'] is not None else 'host_wall_at_eos_scheduling'
+        row['transition_prefill_in_reward']=False
         self.trace.append(row)
         if self.trace_path:
             path = Path(self.trace_path); path.parent.mkdir(parents=True, exist_ok=True)
@@ -166,18 +177,27 @@ class TLTScheduler:
             group['rounds'] += 1; group['time_s'] += row['processing_time_s']
             group['accepted'] += row['aal'] * row['batch_size'];group['response_rounds'] += row['batch_size']
         for group in by_strategy.values(): group['aal'] = group['accepted']/group['response_rounds']
+        response_rounds=sum(r['batch_size'] for r in self.trace)
+        accepted=sum(r['aal']*r['batch_size'] for r in self.trace)
+        spec=[r for r in self.trace if r['phase']=='speculative']
+        spec_rounds=sum(r['batch_size'] for r in spec)
+        spec_accepted=sum(r['aal']*r['batch_size'] for r in spec)
         return dict(tlt_target_only_rounds=sum(r['phase']=='target_only' for r in self.trace),
                     tlt_speculative_rounds=sum(r['phase']=='speculative' for r in self.trace),
                     tlt_sd_transition_count=self.transition_count,
                     tlt_transition_draft_prefill_s=self.transition_prefill_s,
                     tlt_strategy_trace=self.trace.copy(),tlt_strategy_metrics=by_strategy,
-                    tlt_verification_capacity=self.capacity)
+                    tlt_verification_capacity=self.capacity,
+                    tlt_max_live=self.max_live,
+                    effective_aal=accepted/response_rounds if response_rounds else 0.,
+                    speculative_aal=spec_accepted/spec_rounds if spec_rounds else 0.,
+                    tlt_speculative_accepted_length=spec_accepted,tlt_speculative_response_rounds=spec_rounds)
 
     def state_dict(self):
         return dict(config=asdict(self.config), manager=copy.deepcopy(self.manager),
                     rng=self.rng.get_state(), rollout_id=self.rollout_id, replay_index=self.replay_index,
                     runtime=copy.deepcopy({name:getattr(self,name) for name in
-                        ('gate','round','current','capacity','trace','transition_count','transition_prefill_s') if hasattr(self,name)}))
+                        ('gate','round','current','capacity','max_live','trace','transition_count','transition_prefill_s') if hasattr(self,name)}))
 
     def load_state_dict(self, state):
         if state['config'] != asdict(self.config): raise ValueError('resume TLT scheduler config mismatch')
