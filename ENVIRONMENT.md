@@ -1,15 +1,19 @@
-# FastGRPO environment
+# FastGRPO installed-stack compatibility
 
-Production dependencies nằm trong `requirements.txt`, copy pins từ SpecNaacl.
-Python >=3.10; deployment `.python-version` là 3.12. Torch2.8.0/cu128,
-Triton3.4.0, Transformers4.51.3, PEFT0.17.1. Không cần SGLang/verl/SpecForge.
+`requirements.txt` giữ installation pins tham chiếu, không phải yêu cầu downgrade
+environment hiện có. Python>=3.10. Validator port nguyên từ SpecNaacl hỗ trợ bounded
+Torch/Transformers/PEFT API families và thực sự chạy target decoder/cache, draft
+pretrain backward, AdamW/scheduler, LoRA/state và checkpoint roundtrip.
 
 ```bash
-bash scripts/bootstrap_environment.sh
-source .venv/bin/activate
 python scripts/validate_environment.py --require-cuda
+# Chỉ dùng khi muốn kiểm tra exact reference pins:
+python scripts/validate_environment.py --require-cuda --strict-versions
 ```
 
-Validation RTX3090 dùng Python3.10, Torch2.5.1/cu124, Triton3.1.0,
-Transformers4.51.3 và PEFT0.17.1. Kết quả này không chứng nhận deployment pins/B200.
-README/RUN_TLT_OPD.md mới thay tài liệu cũ đã chuyển vào legacy/sglang.
+Transformers4.51.3 dùng API native; 5.12.1 dùng adapter trong
+`helper/transformers_compat.py`. Không đổi draft architecture/attention/loss/RNG.
+Không auto-install, auto-downgrade hoặc bỏ API probes.
+
+`OPD_SAMPLER_MODE=strict` default; `finite` opt-in sau validation trên GPU B200.
+Chạy cả hai method bằng cùng sampler mode. B200 commands ở RUN_TLT_OPD.md.

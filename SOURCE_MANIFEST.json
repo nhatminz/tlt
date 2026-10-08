@@ -1,6 +1,6 @@
 {
   "description": "FastGRPO + ReflexOPD source snapshot, algorithmic FastRL TLT reference; no runtime sibling imports",
-  "specnaacl_commit": "2cd1df2304d1851588d36a4b24bc7f05af1a0d15",
+  "specnaacl_commit": "8366844b52c70835768dba57e06bda149a65f5d9",
   "files": [
     {
       "source": "SpecNaacl/helper/opd_attention.py",
@@ -78,8 +78,8 @@
       "source": "SpecNaacl/helper/fastgrpo_model.py",
       "destination": "helper/fastgrpo_model.py",
       "snapshot": "sources/SpecNaacl/helper/fastgrpo_model.py",
-      "sha256": "2d29c04308da80cd22650c539bd13ba1dc01d62dec70d54dda6142ad9979f252",
-      "port_sha256": "2d29c04308da80cd22650c539bd13ba1dc01d62dec70d54dda6142ad9979f252",
+      "sha256": "cab14c5b933937627970c16a74eca935f5b7e116740438d5f624ddfaf585aea6",
+      "port_sha256": "cab14c5b933937627970c16a74eca935f5b7e116740438d5f624ddfaf585aea6",
       "port_status": "exact"
     },
     {
@@ -94,8 +94,8 @@
       "source": "SpecNaacl/helper/opd_sampling.py",
       "destination": "helper/opd_sampling.py",
       "snapshot": "sources/SpecNaacl/helper/opd_sampling.py",
-      "sha256": "ef33be635e73c7fb42cf09e49bfd976a26efd316e724d511ce0e86ceae58600b",
-      "port_sha256": "ef33be635e73c7fb42cf09e49bfd976a26efd316e724d511ce0e86ceae58600b",
+      "sha256": "04d53d765fe4884aec5403ec4ec1ce869bab314d3fc577e63f36077ebc2bf5e9",
+      "port_sha256": "04d53d765fe4884aec5403ec4ec1ce869bab314d3fc577e63f36077ebc2bf5e9",
       "port_status": "exact"
     },
     {
@@ -198,8 +198,8 @@
       "source": "SpecNaacl/helper/fastgrpo_generate.py",
       "destination": "helper/fastgrpo_generate.py",
       "snapshot": "sources/SpecNaacl/helper/fastgrpo_generate.py",
-      "sha256": "cdd919e217516df2228f431b7cc550241bc03f81ebcf911123ff3315ce9c9366",
-      "port_sha256": "cdd919e217516df2228f431b7cc550241bc03f81ebcf911123ff3315ce9c9366",
+      "sha256": "dd9495d765b9669a6b673e61e13e2af6f073b4140b00adb1bf42c4bab64efd93",
+      "port_sha256": "dd9495d765b9669a6b673e61e13e2af6f073b4140b00adb1bf42c4bab64efd93",
       "port_status": "exact"
     },
     {
@@ -223,8 +223,8 @@
       "destination": "helper/opd_generate.py",
       "snapshot": "sources/SpecNaacl/helper/opd_generate.py",
       "sha256": "d078ad2b23680c83a18e3cbb35ff7c4b2071a7577ed9404b8c9413a4d69da806",
-      "port_sha256": "d078ad2b23680c83a18e3cbb35ff7c4b2071a7577ed9404b8c9413a4d69da806",
-      "port_status": "exact"
+      "port_sha256": "290868af7e1609307d1fe1c068f26089d2143b7144bea3a92a8ed50f23f02889",
+      "port_status": "adapted"
     },
     {
       "source": "SpecNaacl/helper/opd_reflex.py",
@@ -279,15 +279,15 @@
       "destination": "scripts/check_training_sources.py",
       "snapshot": "sources/SpecNaacl/scripts/check_training_sources.py",
       "sha256": "738a8d29d1bca12585a9e722147167d65f1ba063dd665ae1a168336e9daa7e41",
-      "port_sha256": "2725cea1f76695304971a27ffc92a7a28a4187fa2af5ed1f5a6996143b31ac76",
+      "port_sha256": "d8796b35976cb7a7728f1a53f08a8465ebb8786b6f365011c76a3d894fbf3701",
       "port_status": "adapted"
     },
     {
       "source": "SpecNaacl/scripts/validate_environment.py",
       "destination": "scripts/validate_environment.py",
       "snapshot": "sources/SpecNaacl/scripts/validate_environment.py",
-      "sha256": "cb917a8d24d5ac2452b8e54a5ee0e9cb17cab74010b09417c8bb0ac0fbb9a3cc",
-      "port_sha256": "cb917a8d24d5ac2452b8e54a5ee0e9cb17cab74010b09417c8bb0ac0fbb9a3cc",
+      "sha256": "bfe6e9b5813d9d7e73f53415b4707577e17398de2227b8cc40240561bfe9d785",
+      "port_sha256": "bfe6e9b5813d9d7e73f53415b4707577e17398de2227b8cc40240561bfe9d785",
       "port_status": "exact"
     },
     {
@@ -335,7 +335,7 @@
       "destination": "scripts/launch/train_model.sh",
       "snapshot": "sources/SpecNaacl/scripts/launch/train_model.sh",
       "sha256": "0d38b4b3b277872521c13833e304bcde7948172833cc651f535932860c2093fc",
-      "port_sha256": "0672921df5b7aaece53e8ebc92f7dc08bb1942950a1f28159fc8b79a27d3deca",
+      "port_sha256": "cfb306cacd506f6483ede64dc252023486edf8c1472483ddf4b29707923f5e45",
       "port_status": "adapted"
     },
     {
@@ -399,7 +399,7 @@
       "destination": "configs/_shared/b200_common.env",
       "snapshot": "sources/SpecNaacl/configs/_shared/b200_common.env",
       "sha256": "36e72c90151608db667dd83d89fc4af60ff49dbcc04ec4f06daaabf58171ecfd",
-      "port_sha256": "ee9579353cf4097bfcb366ce63236c0ab121288ee187861143a54ff5503f327a",
+      "port_sha256": "355f201ba19bba07050a9cb62a7a13d11f1e0da864fc8a83c5c7f39889219240",
       "port_status": "adapted"
     },
     {
@@ -459,7 +459,7 @@
       "destination": "scripts/benchmark_tlt_opd.py",
       "snapshot": "sources/SpecNaacl/scripts/benchmark_opd_reflex.py",
       "sha256": "9da3657060ff804a102da3f285a0aac26577d27f0c04e7a47165071f8a79918d",
-      "port_sha256": "188a1bead848de82aebe13fccb3e62f22263afd3d39c80e2a8db8e27ff106f5c",
+      "port_sha256": "3242c7d4d3b468cdadc418de801dac3c8681aab6a315182937fde17812c51265",
       "port_status": "adapted"
     },
     {
@@ -482,13 +482,53 @@
       "source": "SpecNaacl/tests/tiny_training_runner.py",
       "destination": "tests/tiny_training_runner.py",
       "snapshot": "sources/SpecNaacl/tests/tiny_training_runner.py",
-      "sha256": "3a881df6fabb080f6f0684c3646d1a5b1587d194234560ab5cad8d37f38d20eb",
-      "port_sha256": "1c031346e5408001d7fabd1d234a88aeb9491758469c6768a35d00b1d3e10499",
+      "sha256": "3bdf2ae63d37245f09be79713aa5fdead9515c437cbe93321efa123cdcd5a3e2",
+      "port_sha256": "7cb5b971b00712c0c59a606ca1bb254cd39aae30fba2345ba576ea06533b705c",
       "port_status": "adapted"
+    },
+    {
+      "source": "SpecNaacl/helper/transformers_compat.py",
+      "destination": "helper/transformers_compat.py",
+      "snapshot": "sources/SpecNaacl/helper/transformers_compat.py",
+      "sha256": "d373f2043f39ca5d7fe990e365a9c17a7ab5d29720b6c113c61cd0b1baa78b3c",
+      "port_sha256": "d373f2043f39ca5d7fe990e365a9c17a7ab5d29720b6c113c61cd0b1baa78b3c",
+      "port_status": "exact"
+    },
+    {
+      "source": "SpecNaacl/helper/environment_checks.py",
+      "destination": "helper/environment_checks.py",
+      "snapshot": "sources/SpecNaacl/helper/environment_checks.py",
+      "sha256": "b1406dc5575937b3084ca85f993a8f8dbd483d3256f1aefd25fb8008decbe635",
+      "port_sha256": "b1406dc5575937b3084ca85f993a8f8dbd483d3256f1aefd25fb8008decbe635",
+      "port_status": "exact"
+    },
+    {
+      "source": "SpecNaacl/tests/test_environment_compat.py",
+      "destination": "tests/test_environment_compat.py",
+      "snapshot": "sources/SpecNaacl/tests/test_environment_compat.py",
+      "sha256": "0a3ab9c7eb406038da03285c2549f4405e371c829f6e355df1f637b9512a4fcd",
+      "port_sha256": "0a3ab9c7eb406038da03285c2549f4405e371c829f6e355df1f637b9512a4fcd",
+      "port_status": "exact"
+    },
+    {
+      "source": "SpecNaacl/tests/test_opd_sampling_finite.py",
+      "destination": "tests/test_opd_sampling_finite.py",
+      "snapshot": "sources/SpecNaacl/tests/test_opd_sampling_finite.py",
+      "sha256": "1a06c2f51ba445cdf8f2ded5e4fb8a3c931703cf6ec1bf9fc230d6eab8593171",
+      "port_sha256": "1e4e6382fffae214d7aae13204f2369d2929a78567ef8b40849e18c8d1f6b0cc",
+      "port_status": "adapted"
+    },
+    {
+      "source": "SpecNaacl/tests/references/opd_sampling_before_finite.py",
+      "destination": "tests/references/opd_sampling_before_finite.py",
+      "snapshot": "sources/SpecNaacl/tests/references/opd_sampling_before_finite.py",
+      "sha256": "ef33be635e73c7fb42cf09e49bfd976a26efd316e724d511ce0e86ceae58600b",
+      "port_sha256": "ef33be635e73c7fb42cf09e49bfd976a26efd316e724d511ce0e86ceae58600b",
+      "port_status": "exact"
     }
   ],
   "tlt_algorithm_files": {
-    "helper/tlt_generate.py": "f677cab64884c261cc32b55123a5e8866adce857e2463e271f6d17f59f974bf9",
+    "helper/tlt_generate.py": "a6fd3a16cfd9ab989389f020093c335ba4c423f529170928abc09c4b3e5c1071",
     "helper/tlt_scheduler.py": "6c7a677b3e36a98c012ab2eb3c2c6515a84c28359b79c8821dca83e0b55f0136",
     "helper/tlt_transition.py": "62f1bd54da5b464b047bd1034f6ee2195da9ce0d731b8a90de0155cdc96032c1",
     "helper/tlt_workspace.py": "59ad22dd5919d9f6fc4a7b567e70ff6a299a83110f84e1502c798cccb89fc43f",

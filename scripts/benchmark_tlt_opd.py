@@ -17,6 +17,28 @@ sys.path.insert(0,str(ROOT))
 from helper.tlt_scheduler import TLTConfig, TLTScheduler
 
 
+def time_generation_and_training(generate, train=None, *, synchronize, clock=time.perf_counter):
+    """Adjacent wall intervals; generation never includes draft backward/update.
+
+    Synchronization belongs only to benchmark phase boundaries. Timing does not
+    insert an optimizer step or flush partial accumulation.
+    """
+    synchronize()
+    start=clock()
+    output=generate()
+    synchronize()
+    generated=clock()
+    if train is not None:
+        train(output)
+        synchronize()
+        finished=clock()
+    else:
+        finished=generated
+    return output,dict(generation_wall_s=generated-start,
+                       draft_training_wall_s=finished-generated,
+                       combined_wall_s=finished-start)
+
+
 def parser():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('target-model','draft-checkpoint','dataset-path'):
@@ -64,6 +86,7 @@ def canonical_config(args,batch,seed,method,lr,stream):
         batch_size=batch,responses=args.responses,seed=seed,temperature=args.temperature,top_p=args.top_p,top_k=args.top_k,
         dtype=args.dtype,attention=args.attn_implementation,max_length=args.max_length,max_prompt_length=args.max_prompt_length,
         warmup=args.warmup,measured_iterations=args.iterations,tlt=asdict(TLTConfig.from_env()),profiling_replay=args.profile,
+        sampler_mode=os.getenv('OPD_SAMPLER_MODE','strict'),
         training=dict(online_draft=args.online_draft,objective='fastgrpo_smoothl1_2_ce_0.1',lr=args.draft_lr,
             optimizer='AdamW',accumulation=args.draft_accumulation_steps,update_cadence='existing draft optimizer boundary',target_frozen=True),
         verifier='SpecNaacl FastGRPO PackedTree/sample-once token matching',cuda_graph=False,
@@ -186,6 +209,8 @@ def benchmark(args):
                         return_all_draft_input=args.online_draft,statistical_time=False,opd_rank=args.rank,opd_topk=args.topk,
                         opd_fast_lr=lr,opd_update_stream=bool(stream),opd_visited_weight=args.visited_weight,
                         opd_frontier_weight=args.frontier_weight,opd_train_projector=args.online_draft,opd_profile=profile)
+                return output
+            def train_rollout(output,entry,opt,index):
                 if args.online_draft:
                     for key in ('all_draft_input_states','all_draft_input_ids'):output[key]=[x.clone() for x in output[key]]
                     model.train();model.target_model.eval()
@@ -196,26 +221,33 @@ def benchmark(args):
                         if method=='tlt_opd_reflex':model.apply_opd_projector_gradient()
                         opt.step();opt.zero_grad()
                     model.eval()
-                return output
             for _ in range(args.warmup):
                 scheduler,opt=reset()
-                for i,entry in enumerate(batches):rollout(entry,seed+i,scheduler,opt,i)
+                for i,entry in enumerate(batches):
+                    warm_output=rollout(entry,seed+i,scheduler,opt,i)
+                    if args.online_draft: train_rollout(warm_output,entry,opt,i)
+                del warm_output
             scheduler,opt=reset(measured=True)
             try:
                 for i,entry in enumerate(batches):
                     replay_state=scheduler.state_dict() if args.profile else None
-                    before=counts.copy();torch.cuda.synchronize();torch.cuda.reset_peak_memory_stats();start=time.perf_counter()
-                    output=rollout(entry,seed+i,scheduler,opt,i)
-                    torch.cuda.synchronize();wall=time.perf_counter()-start
+                    before=counts.copy();torch.cuda.reset_peak_memory_stats()
+                    train=(lambda output:train_rollout(output,entry,opt,i)) if args.online_draft else None
+                    output,times=time_generation_and_training(lambda:rollout(entry,seed+i,scheduler,opt,i),train,
+                        synchronize=torch.cuda.synchronize)
+                    wall=times['generation_wall_s']
                     forwards={k:counts[k]-before[k] for k in counts}
                     if forwards['target']!=1+output['batch_verification_rounds']:raise AssertionError('extra target transformer forward')
                     row=dict(method=method,batch_size=batch,seed=seed+i,case_seed=seed,iteration=i,fast_lr=lr,stream=stream,run_position=position,
-                        prompt_sha256=digest.hexdigest(),generation_wall_s=wall,generated_tokens=sum(output['response_generated_tokens']),
+                        prompt_sha256=digest.hexdigest(),**times,generated_tokens=sum(output['response_generated_tokens']),
                         aal=output['effective_aal'],effective_aal=output['effective_aal'],speculative_aal=output['speculative_aal'],
                         verification_rounds=output['total_decoded_token_num'],batch_verification_rounds=output['batch_verification_rounds'],
                         accepted_draft_tokens=output['total_accepted_draft_tokens'],proposed_draft_tokens=output['total_proposed_draft_tokens'],
                         acceptance_rate=output['draft_acceptance_rate'],target_forwards=forwards['target'],draft_forwards=forwards['draft'],
-                        tokens_per_s=sum(output['response_generated_tokens'])/wall,peak_allocated_bytes=torch.cuda.max_memory_allocated(),
+                        tokens_per_s=sum(output['response_generated_tokens'])/wall,
+                        generation_tokens_per_s=sum(output['response_generated_tokens'])/wall,
+                        combined_tokens_per_s=sum(output['response_generated_tokens'])/times['combined_wall_s'],
+                        peak_allocated_bytes=torch.cuda.max_memory_allocated(),
                         no_extra_target_forward=True,
                         **{k:v for k,v in output.items() if k.startswith(('tlt_','opd_')) and isinstance(v,(int,float,str,dict))})
                     rows.append(row)
@@ -246,7 +278,8 @@ def benchmark(args):
     for name,data in [('responses.jsonl',responses),('strategy_trace.jsonl',traces)]:
         (destination/name).write_text(''.join(json.dumps(row)+'\n' for row in data))
     fields=['method','batch_size','seed','case_seed','iteration','fast_lr','stream','run_position','aal','effective_aal','speculative_aal','opd_overhead_ms','opd_feedback_ms','accepted_draft_tokens','proposed_draft_tokens',
-        'acceptance_rate','verification_rounds','target_forwards','draft_forwards','generation_wall_s','tokens_per_s','peak_allocated_bytes',
+        'acceptance_rate','verification_rounds','target_forwards','draft_forwards','generation_wall_s','draft_training_wall_s','combined_wall_s',
+        'generation_tokens_per_s','combined_tokens_per_s','tokens_per_s','peak_allocated_bytes',
         'tlt_target_only_rounds','tlt_speculative_rounds','tlt_sd_transition_count','tlt_transition_draft_prefill_s']
     with (destination/'summary.csv').open('w',newline='') as f:
         writer=csv.DictWriter(f,fieldnames=fields,extrasaction='ignore');writer.writeheader();writer.writerows(rows)

@@ -3,7 +3,7 @@ import torch
 import math
 import time
 from copy import deepcopy
-from transformers import DynamicCache
+from helper.transformers_compat import DynamicCache
 from helper.tree_verification import pack_tree, trace_verified_path, PackedTree, VerifiedPath
 from helper.opd_history import ContiguousRolloutHistory as RolloutHistory
 from helper.opd_reflex import OPDReflex

@@ -12,6 +12,7 @@ source "$MODEL_ENV"
 # updated together. Keep defaults here too, before ANY expansion under set -u.
 # An explicit environment/config override always takes precedence.
 export ROLLOUT_LOG_FLUSH_INTERVAL="${ROLLOUT_LOG_FLUSH_INTERVAL:-1}"
+export OPD_SAMPLER_MODE="${OPD_SAMPLER_MODE:-strict}"
 export OPD_PROJECTOR_LR="${OPD_PROJECTOR_LR:-}"
 export OPD_PROPOSAL_PROFILE="${OPD_PROPOSAL_PROFILE:-}"
 export OPD_PROPOSAL_MODE="${OPD_PROPOSAL_MODE:-auto}"
@@ -228,6 +229,7 @@ ln -sfn "$RUN_DIR" "$TRAIN_MODEL_ROOT/active_run"
   --item "opd_profile=$OPD_PROFILE" --item "opd_diagnostics=$OPD_DIAGNOSTICS" \
   --item "opd_backend=$OPD_BACKEND" \
   --item "opd_train_projector=$OPD_TRAIN_PROJECTOR" --item "opd_proposal_mode=$OPD_PROPOSAL_MODE" \
+  --item "sampler_mode=$OPD_SAMPLER_MODE" \
   --item "opd_dense_implementation=$OPD_DENSE_IMPLEMENTATION" \
   --item "opd_proposal_profile=$OPD_PROPOSAL_PROFILE" \
   --item "opd_proposal_profile_dir=$OPD_PROPOSAL_PROFILE_DIR" \

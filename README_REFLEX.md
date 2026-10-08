@@ -119,3 +119,34 @@ Tests bao gồm source integrity, native FastGRPO tokens/RNG/history parity trê
 Qwen2/Qwen3, real transition hidden/logits/KV, no extra forwards, finishing/compaction,
 depth8/K4/verify48/32/16/8, BEG reference traces, OPD full-V kernels và optimizer,
 profiles/dispatch/tuner, paired launch configs, GRPO training/resume và pair outputs.
+
+## Compatibility và sampler (2026-10-08)
+
+`helper/transformers_compat.py`, `environment_checks.py`, `fastgrpo_model.py` và
+validator được port chính xác từ SpecNaacl mới. Transformers4.51.3 giữ API native;
+5.12.1 dùng adapter singular/plural decoder output và DynamicCache legacy list views.
+Không đổi attention, weights, objective, tree hoặc KV alignment. Pretrain, TLT và OPD
+đều dùng model adapter này. `helper/opd_profiles.py` vẫn giữ adaptation riêng cho TLT.
+
+Requirements vẫn là installation pins tham chiếu. Dùng environment hiện có:
+
+```bash
+python scripts/validate_environment.py --require-cuda
+```
+
+Validator kiểm tra bounded API families rồi chạy thật draft pretrain/backward,
+AdamW/scheduler, target decoder/cache, PEFT LoRA/state và checkpoint roundtrip.
+`--strict-versions` yêu cầu exact pins. Không tự cài hoặc downgrade thư viện.
+
+`OPD_SAMPLER_MODE=strict` là default cho cả `tlt` và `tlt_opd_reflex`.
+`finite` là opt-in, dùng nguyên implementation SpecNaacl: device assertion cho
+nonfinite sampled logits, không host scalar reads/dynamic valid-row compaction.
+Đặt biến trước khi khởi động process; pair config ghi sampler mode trong phần
+shared và reject nếu hai method khác mode. B200 cần validate trước khi opt-in.
+
+Online-draft benchmark tách `generation_wall_s`, `draft_training_wall_s`,
+`combined_wall_s`, `generation_tokens_per_s`, `combined_tokens_per_s`.
+`tokens_per_s` là alias generation throughput; combined gồm cả backward/optimizer
+theo cadence gốc. Hai wall intervals nối tiếp, không double-count.
+`target_time_cost` khi `statistical_time=True` gồm cả target-only forwards;
+profiling tắt không thêm event wait.

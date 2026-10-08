@@ -3,7 +3,7 @@ import torch
 import math
 import time
 from copy import deepcopy
-from transformers import DynamicCache
+from helper.transformers_compat import DynamicCache
 from helper.tree_verification import pack_tree, trace_verified_path, PackedTree, VerifiedPath
 from helper.opd_history import ContiguousRolloutHistory as RolloutHistory
 from helper.tlt_scheduler import TLTScheduler
@@ -469,6 +469,7 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
             target_attention_mask=attention_workspace.causal('target_only',past_kv_len,1,bsz,
                 model.target_model.dtype,padding_positions_tensor)
             target_position_ids=(past_position_ids_tensor+1)[:,None]
+            if statistical_time: section_timer.begin()
             with torch.amp.autocast(str(model.target_model.device), dtype=torch.bfloat16 if model.dtype == torch.bfloat16 else torch.float16):
                 target_outputs=model_forward(model.target_model,target_next_token,target_attention_mask,
                     target_past_key_values,target_position_ids)
@@ -479,6 +480,9 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
                     top_p=top_p,top_k=top_k,eos_token_id=eos_token_id,return_probs=False)
                 next_token=sampled if physical_to_canonical is None else sampled.index_select(0,physical_to_canonical)
                 del logits,head_input
+            if statistical_time:
+                section_timer.end()
+                total_target_time += section_timer.seconds()
             # Same required scheduling boundary as the previous root-only tree.
             finished=next_token.eq(eos_token_id)[:,0].cpu().tolist()
             scheduling_packet=[[1,int(done),1,-1] for done in finished]

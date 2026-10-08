@@ -20,7 +20,7 @@ def validate_training_sources(repo_root: Path, backend: str):
         "opd_kv_kernels.py", "opd_attention.py", "opd_attention_kernels.py",
         "opd_sampling.py", "opd_history.py", "rollout_metrics.py",
         "opd_profiles.py",
-        "shared_rollout.py", "modeling_draft.py", "tlt_generate.py", "tlt_scheduler.py",
+        "shared_rollout.py", "modeling_draft.py", "transformers_compat.py", "environment_checks.py", "tlt_generate.py", "tlt_scheduler.py",
         "tlt_mab.py", "tlt_workspace.py", "tlt_transition.py",
     ]
     paths = [Path(repo_root) / "helper" / name for name in required]

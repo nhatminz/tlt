@@ -134,7 +134,7 @@ def test_transition_direct_prefix_hidden_logits_kv_parity(monkeypatch,family):
     # already sampled target bonus; all earlier ids form the current prefix.
     assert ids.shape==(4,6)
     from helper.modeling_draft import DraftModel
-    config=deepcopy(model.target_model.config);config.num_hidden_layers=1
+    config=deepcopy(model.target_model.config);config.num_hidden_layers=1;config.rope_scaling=None
     direct=DraftModel(config).cuda();direct.load_state_dict(model.draft_model.state_dict());direct.eval()
     minimum=torch.finfo(model.dtype).min
     mask=torch.triu(torch.full((6,6),minimum,device='cuda',dtype=model.dtype),diagonal=1)[None,None].repeat(4,1,1,1)

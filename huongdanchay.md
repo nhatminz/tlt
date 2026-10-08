@@ -9,7 +9,7 @@ checkpoint compact/EAGLE3 cũ. Nếu copy TltReflex độc lập, override `MODE
 
 ```bash
 cd /workspace/storage-shared/nlp/minhpn19/TltReflex
-bash scripts/bootstrap_environment.sh
+# Activate environment đã cài sẵn trên server; không cần reinstall/downgrade.
 source .venv/bin/activate
 export PYTHON_BIN="$(command -v python)"
 export CUDA_VISIBLE_DEVICES=0
@@ -18,7 +18,10 @@ python scripts/check_source_manifest.py
 python -m pytest -q
 ```
 
-Pins là Torch2.8.0/cu128, Triton3.4.0, Transformers4.51.3, PEFT0.17.1, như source.
+Pins tham chiếu là Torch2.8.0/cu128, Triton3.4.0, Transformers4.51.3, PEFT0.17.1.
+Validator cũng hỗ trợ compatible API families, gồm Transformers5.12.1/PEFT0.21.1;
+phải pass decoder/cache, draft backward, optimizer, LoRA và checkpoint probes thật.
+Chỉ dùng bootstrap khi chủ động muốn tạo environment từ pins; không cần đổi stack B200 hiện tại.
 Old wheelhouse SGLang có thể khác dependencies; bootstrap mới dùng requirements mới.
 Offline có thể set `WHEELHOUSE=/path/to/new-compatible-wheels`.
 
@@ -39,6 +42,7 @@ export TLT_BS_THRESHOLD=32 TLT_SD_WARMUP_CHECKS=10
 export TLT_MAB_CONFIGS=8_4_48,8_4_32,8_4_16,8_4_8
 export TLT_MAB_ALGORITHM=BEG TLT_MAB_BS_THRESHOLDS=1,2,5,21
 export TLT_MAB_SEED=42
+export OPD_SAMPLER_MODE=strict
 export OPD_RANK=8 OPD_TOPK=16 OPD_FAST_LR=0.01
 export OPD_UPDATE_STREAM=1 OPD_TRAIN_PROJECTOR=1
 export OPD_PROPOSAL_MODE=auto OPD_DENSE_IMPLEMENTATION=auto
@@ -138,3 +142,33 @@ unset TLT_STRATEGY_REPLAY
 
 Giữ nguyên responses/length/sampling/checkpoint/iterations. Khi live batch/phase khác
 trace, replay fail rõ ràng để tránh gán nhãn controlled cho một workload không khớp.
+
+## Compatibility / finite sampler / online timing
+
+```bash
+python scripts/check_source_manifest.py
+python scripts/validate_environment.py --require-cuda
+python -m compileall -q .
+python -m pytest -q
+```
+
+Sau khi đổi code/runtime adapter, phải tune lại nếu execution fingerprint không
+khớp. Tuner và model/data paths ở trên giữ nguyên. Strict là production default.
+Để thử finite sau validation trên B200, set **cùng một mode** cho cả hai process:
+
+```bash
+export OPD_SAMPLER_MODE=finite
+METHOD=tlt BENCH_OUTPUT="$PWD/outputs/smoke/finite_tlt" bash run_benchmark.sh
+METHOD=tlt_opd_reflex OPD_FAST_LRS=0 BENCH_OUTPUT="$PWD/outputs/smoke/finite_zero" bash run_benchmark.sh
+METHOD=tlt_opd_reflex OPD_FAST_LRS=0.01 BENCH_OUTPUT="$PWD/outputs/smoke/finite_live" bash run_benchmark.sh
+export OPD_SAMPLER_MODE=strict
+```
+
+Finite không thực hiện fallback cho sampled logits NaN/Inf; device assertion fail
+thay vì thay target distribution. Production default chỉ đổi sau khi tự xác minh
+stack/GPU B200 thật.
+
+`BENCH_ONLINE_DRAFT=1` giữ objective/accumulation/optimizer cadence gốc và report
+riêng generation/training/combined wall time. `tokens_per_s` và
+`generation_tokens_per_s` chỉ tính generation; `combined_tokens_per_s` tính cả draft
+training. Peak memory trong online benchmark gồm cả hai phases.

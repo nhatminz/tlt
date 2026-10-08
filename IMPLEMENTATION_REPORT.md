@@ -1,112 +1,106 @@
-# TLT tail correctness/performance revision — 2026-10-08
+# Compatibility, shared sampler and timing — 2026-10-08
 
-Only TltReflex was modified. SpecNaacl status remained clean. OPD math/kernels,
-projector optimizer, sampler, model and tree verifier remain byte-identical to the
-current SpecNaacl source snapshots. No SGLang/Spot Trainer production dependency.
+Only TltReflex changed. SpecNaacl status remained clean. No libraries were installed,
+reinstalled or downgraded. requirements pins remain unchanged. Existing environments
+were used for all checks; the exact B200 CUDA stack was not available locally.
 
-## Fixes and files
+## Files / implementation
 
-- `helper/tlt_scheduler.py`: exact pending boundary. The Nth qualifying round is
-  target-only, then draft-only rebuild, then SD starts at N+1. Tail verification
-  capacity = min(initial live batch, threshold) × max configured verification_num.
-  Separate effective/speculative AAL; trace records CUDA-event timing/reward basis.
-- `helper/tlt_generate.py`: direct one-token target-only path, same sampler and
-  request ordering, feature/token history and EOS/swap-remove compaction. No
-  PackedTree, tree verifier/mask, OPD state or speculative scratch before transition.
-  OPD/tree scratch and async stream initialize only after the triggering round,
-  using the actual surviving tail batch. Pending A-gradient sums are preserved;
-  B retains the original start/finish reset lifecycle.
-- `helper/tlt_timing.py`: reusable stream CUDA events for speculative round/MAB
-  reward, inclusive of proposal/verification/feedback/committed append and async
-  dependency. Only end event is waited for elapsed time; no device synchronization
-  in rollout, including statistical timing. Transition prefill has its own event
-  interval and is excluded from MAB reward. Target-only adds no timing event wait.
-- `scripts/tune_opd_proposals.py/.sh`, `resolve_opd_profile.py`: flattened unique
-  tail workload only, max contexts=min(batch×responses, threshold)×max(strategy K).
-  Seed42 sorted scattered active IDs, exact 3-backend parity and profile validation
-  before atomic write. OPD math/proposal kernels unchanged.
-- `scripts/run_tlt_opd_reflex.sh`, `scripts/launch/train_model.sh`,
-  `scripts/sweep_tlt_opd_reflex.sh`: production require calibrated TLT-native profile
-  by default; explicit OPD_REQUIRE_CALIBRATED_PROFILE=0 supports development smoke.
-- `helper/rollout_metrics.py`, `grpo_speculative.py`, `scripts/benchmark_tlt_opd.py`:
-  effective AAL, speculative AAL, target-only/SD rounds, transition time, reward,
-  throughput and memory. Optional --profile measures inclusive OPD feature/proposal/
-  feedback cost in a separate frozen replay excluded from measured wall/peak/TPS.
-  No invented zero when profiling is disabled. Inclusive section cost is not the
-  counterfactual slowdown; pair/ablation wall time measures the system effect.
-- `configs/_shared/b200_common.env`: default verification capacity also tail-bounded.
-- `tests/test_tail_revision.py`, `test_tlt_fastgrpo.py`, `tests/reference/`: old
-  root-only-tree implementation frozen strictly as a test reference; native MAB
-  parity, full target masks/KV, hidden/history/tokens/RNG, boundary, lazy allocation,
-  no-global-sync, terminal trigger, large batch shrink and pending A gradients.
-- Source manifest/refresh script and README/RUN_TLT_OPD instructions updated.
+Exact source ports from the current SpecNaacl:
+`helper/transformers_compat.py`, `helper/environment_checks.py`,
+`helper/fastgrpo_model.py`, `helper/fastgrpo_generate.py`, `helper/opd_sampling.py`,
+`scripts/validate_environment.py`. Source snapshots and SOURCE_MANIFEST.json have
+actual SHA256 values computed from the source bytes. The manifest checks66 entries.
+Source compatibility/sampler tests and their frozen sampler reference were ported;
+the tokenizer fixture was refreshed from source to real Qwen BPE for HF5 inference.
 
-## Validation
+`helper/tlt_generate.py` and retained `helper/opd_generate.py` now import the source
+DynamicCache adapter. Production/pretraining use FastGRPOModel's target decoder API
+adapter. Native modern target calls keep native tensor/plural behavior; direct
+FastGRPO calls keep legacy singular-cache/tuple behavior. Weight names and decoder
+outputs are checked against the unadapted model. Existing static cache code works
+with both installed Transformers families and remains unchanged.
 
-Final `python -m pytest -q`: **121 passed**, zero failed/skipped, 33 warnings, 58.57s.
-Warnings are uncalibrated synthetic OPD fixtures; real-model runs require and load a
-validated native profile. compileall, source manifest and `git diff --check` pass;
-`bash -n` passes all 69 production + archived legacy shell scripts.
+Sampler strict stays default. Finite is the exact source implementation with a
+CUDA async nonfinite assertion, full-row sampling and no scalar host reads/dynamic
+valid-row compaction. Both production methods share the same sampler. Config diff
+now records/checks sampler_mode as shared configuration, and train metadata records
+it. Shell defaults remain strict. Finite is not promoted to B200 production default.
 
-GPU regression tests actually executed on RTX3090 include Qwen2/Qwen3 transitions,
-old-path/new-path tokens, CUDA RNG, every target attention mask/KV and returned
-hidden/token training histories, no extra target forward, depth8/K4 budgets48/32/16/8,
-BEG/reward reference, full V151936 BF16/FP16 sparse/fused/GEMM parity, profile dispatch,
-training/resume and analytical projector gradients. Forced finishing fixture starts
-with 64 live responses, shrinks to2 before SD and allocates OPD feedback for96 rows,
-not 64×48. A pending gradients remain untouched by initialization.
+Two timing fixes:
 
-Timing/lifecycle tests forbid torch.cuda.synchronize in rollout for both methods,
-with statistical timing on/off. Fully target-only tests additionally forbid any
-PackedTree/tree workspace/OPD initialization and elapsed-event wait. Pending rebuild
-consumes no CPU/CUDA sampling RNG. Same captured features yield bitwise draft
-hidden/logits/KV parity; independent BF16 target prefill comparison uses explicit
-numerical tolerance on real-token KV (padding remains masked).
+- Target-only decoding adds its target interval to target_time_cost using CUDA events
+  only when statistical_time=True. Off adds no event waits. The boundary includes
+  target forward/head/sampling, matching the speculative target timing boundary.
+- Online benchmark separately measures generation_wall_s, draft_training_wall_s and
+  combined_wall_s; the latter is the sum of the adjacent intervals. Separate
+  generation_tokens_per_s and combined_tokens_per_s are reported in JSON/CSV;
+  tokens_per_s remains the generation alias. Training objective, accumulation and
+  optimizer step boundaries are unchanged. Warmup still includes training when
+  requested, and partial accumulation is not flushed.
 
-## Real measurements (RTX3090, not B200)
+Other adaptations: scripts/benchmark_tlt_opd.py, configs/_shared/b200_common.env,
+scripts/check_training_sources.py, scripts/launch/train_model.sh, regression tests,
+README/ENVIRONMENT/RUN_TLT_OPD docs. helper/opd_profiles.py, TLT gate/MAB/transition,
+OPD math/kernels/optimizer, draft architecture/loss and verifier remain unchanged.
 
-Environment: Python3.10, Torch2.5.1+cu124, Triton3.1.0, Transformers4.51.3,
-PEFT0.17.1. Deployment pins Torch2.8/Triton3.4/B200 were not tested here.
+## Actual validation
 
-Target-only before/after uses a tiny real Qwen2 transformer V97, 1 warmup and
-3 measured seeds42/43/44, total max_length32, zero draft forwards. Median speedup
-ranges **1.12–1.17×** at batches1/2/4/8/16/32. At batch32, old root-tree path takes
-107.44ms vs direct path95.98ms; peak allocated12.28MB vs10.90MB. This measures the
-fixture and implementation overhead, not a model-scale production speedup.
+| Installed environment | Execution checks | Tests |
+|---|---|---|
+| RTX3090, Torch2.5.1+cu124, Transformers4.51.3, PEFT0.17.1 | GPU validator/pretrain backward/optimizer/scheduler, decoder/cache, LoRA/checkpoint probe pass |306 passed,68 warnings,69.98s |
+| RTX3090, Torch2.5.1+cu124, Transformers5.12.1, PEFT0.21.1, datasets5.0.1 | Same real GPU probes pass |306 passed,66 warnings,73.29s |
+| CPU, Python3.12.12, Torch2.13.0+cpu, Transformers5.12.1, PEFT0.21.1, Triton3.7.1 | Real CPU validator/pretrain/optimizer/decoder/cache/LoRA/checkpoint probes pass |87 passed,207 skipped (CUDA unavailable),4.21s |
 
-Full-model acceptance uses real Qwen2.5-1.5B-Instruct, the same existing two-step
-FastGRPO pretrain checkpoint and local SimpleLR prompts, one response per prompt,
-max total length112, max prompt96, seeds42/43, 1 warmup/1 measured iteration,
-async stream1. 48 measured rows cover TLT / OPD LR0 / OPD LR0.01 and all six batches.
-Each row has one transition, target forwards=prefill+rounds, same prompt hashes and
-counterbalanced order; every config_diff has only OPD differences.
+Warnings are existing synthetic profile fallback, intentional strict invalid-logit
+fallback and deterministic-fixture messages. Final suites have zero failed tests.
+Initial failing tests were fixture issues: old generic WordLevel tokenizer loaded as
+Qwen tokenizer under HF5, direct test DraftModel config missing rope_scaling=None,
+and differing test runner tuple layouts. They were corrected using the source Qwen
+BPE fixture and unchanged production draft config; no model/sampler math was changed.
 
-| Batch | TLT tokens/s | OPD LR0 tokens/s | OPD LR0.01 tokens/s |
-|---:|---:|---:|---:|
-| 1 | 36.66 | 36.12 | 35.87 |
-| 2 | 67.99 | 66.38 | 66.04 |
-| 4 | 127.73 | 129.67 | 125.35 |
-| 8 | 251.42 | 258.16 | 254.62 |
-| 16 | 412.98 | 411.54 | 414.49 |
-| 32 | 717.43 | 702.65 | 705.94 |
+Sampler tests check FP32/FP16/BF16 and full V151936 tokens, probabilities, sort/top-k
+teacher metadata and CPU/CUDA RNG bitwise across seeds, temperatures, top-p/top-k,
+ties and strided logits; strict nonfinite fallback matches the frozen old source.
+Finite CUDA invalid-logit checks run in isolated subprocesses and fail as required.
+No-host-read/dynamic-compaction and CUDA graph capture tests pass on RTX3090.
+TLT integration checks acceptance/history/forward counts and compact OPD feedback/B/A
+for strict versus finite, sync and async. FP32 atomic feedback reductions use an
+explicit eight-epsilon-at-tensor-scale bound; sampled tokens/probabilities/RNG remain
+bitwise checks. Timing tests verify every target-only forward is counted, off has no
+event waits, adjacent benchmark phase intervals add exactly, and real online-draft
+GPU runs retain the existing optimizer cadence.
 
-Values aggregate two seeds; baseline column uses baseline runs paired with LR0.
-There are also repeated baseline rows paired with LR0.01 in the raw report. Peak
-allocated at batch32 is 5.49GB (TLT), 5.71GB (OPD0), 5.83GB (OPD0.01). This is a short
-functional smoke with a two-step draft; **no consistent OPD speedup claim**.
+`python scripts/check_source_manifest.py` passes.
+`python scripts/validate_environment.py --require-cuda` passes on both GPU environments.
+`python -m compileall -q .` passes, including archived/upstream sources.
+`bash -n` passes all69 production + archived shell scripts.
+Exact copied FastGRPO generator bytes retain the source's trailing-whitespace EOF;
+no source snapshot bytes were altered to hide that inherited formatting.
 
-Separate full-model profiling replay (batch1, responses2, seed42) records inclusive
-OPD feature/proposal/feedback6.15ms for LR0 and6.74ms for LR0.01 per rollout. These
-numbers are excluded from throughput measurements and are not net wall slowdown.
+## Real model smoke and native profile
 
-Real native tuner on this GPU uses V151936/r8/BF16, tail max_live32/max_contexts128,
-contexts1/2/5/11/25/57/128, scattered rows0/16/1024/V and5 timing iterations. All
-backend bitwise parity checks pass; profile reload/execution-key validation pass.
-An earlier matrix attempt was discarded when a final scheduler edit changed the
-execution fingerprint; the final profile was regenerated and all48 rows rerun.
-Production B200 needs fresh calibration on that GPU with the final source tree.
+Modern GPU stack above, real Qwen2.5-1.5B-Instruct and the same existing two-step
+FastGRPO pretrain checkpoint, local SimpleLR prompts, batch1/2, responses2, seeds42/43,
+LR0/0.01, async stream1, one warmup/measured iteration, max total length112/prompt96.
+Both strict and finite run16 measured rows (32 total), covering all three ablations.
+Within each mode, run order is counterbalanced and config_diff contains only OPD
+changes. Across modes, all48 response token sequences per mode and acceptance/forward
+metrics match exactly in this smoke. Every measured row satisfies no-extra-target-
+forward. Frozen benchmark training time is0 and combined/generation times match.
+This is correctness evidence, not an OPD speedup or fully pretrained quality claim.
 
-Artifacts: ignored `validation/tlt_tail_fix/` contains pytest_final.log,
-profile_load_final.json, final profiles, target_only_performance.json,
-real_matrix_final/{report.json,summary.csv,responses.jsonl,strategy_trace.jsonl,config_diff.json},
-and profile_replay/. B200 commands: [RUN_TLT_OPD.md](RUN_TLT_OPD.md).
+TLT-native tuner reran after the execution fingerprint changed: V151936/r8/BF16,
+contexts1/2/3/4/6/10/16, tail batch4/K4, seeded scattered active rows0/16/1024/V,
+5 timing iterations. All sparse/fused/GEMM bitwise proposal checks pass, and the new
+profile loads/validates against the current GPU/execution key. Profile code itself
+was not changed. B200 must tune on its own GPU/compiler/runtime stack.
+
+Artifacts under ignored `validation/compat_sampler_metrics/`: validator_hf451.log,
+validator_hf512.log, validator_torch213_cpu.log, pytest_hf451.log,
+pytest_hf512_final.log, pytest_torch213_cpu.log, compileall_final.log, native profiles,
+profile_load.json, real_strict/ and real_finite/ reports/CSV/responses/config diff.
+
+Still required on B200: run validator and tests under the actual Torch2.13 CUDA /
+Triton3.7 stack, regenerate native profiles, smoke all three ablations, then validate
+finite mode there before any production default change. Commands: RUN_TLT_OPD.md.
