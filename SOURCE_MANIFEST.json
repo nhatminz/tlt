@@ -327,7 +327,7 @@
       "destination": "scripts/launch/train_model.sh",
       "snapshot": "sources/SpecNaacl/scripts/launch/train_model.sh",
       "sha256": "0d38b4b3b277872521c13833e304bcde7948172833cc651f535932860c2093fc",
-      "port_sha256": "cfb306cacd506f6483ede64dc252023486edf8c1472483ddf4b29707923f5e45",
+      "port_sha256": "e84a136bd4a7cb823d6b90bceac54be9a659339f3b6aaf41771c269cbe14af11",
       "port_status": "adapted"
     },
     {

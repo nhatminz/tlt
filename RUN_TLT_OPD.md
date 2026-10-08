@@ -14,9 +14,16 @@ source .venv/bin/activate
 export PYTHON_BIN="$(command -v python)"
 export CUDA_VISIBLE_DEVICES=0
 python scripts/validate_environment.py --require-cuda
-python scripts/check_source_manifest.py
+python scripts/check_source_manifest.py --runtime
 python -m pytest -q
 ```
+
+Launcher kiểm tra runtime integrity trước training: hash của code trong `helper/`,
+GRPO/pretraining entrypoints và TLT core phải khớp manifest. Snapshot lưu trữ trong
+`sources/` và hash script/config vận hành không chặn training. Vì vậy chỉnh launcher
+theo server hoặc không copy snapshot sẽ không gây lỗi admission. Không cần
+`.python-version`. Để audit đầy đủ source provenance, chạy riêng
+`python scripts/check_source_manifest.py` sau khi copy đầy đủ repo cùng revision.
 
 Pins tham chiếu là Torch2.8.0/cu128, Triton3.4.0, Transformers4.51.3, PEFT0.17.1.
 Validator cũng hỗ trợ compatible API families, gồm Transformers5.12.1/PEFT0.21.1;

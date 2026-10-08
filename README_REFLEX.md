@@ -23,6 +23,9 @@ compact vocab, mapping d2t/t2d hoặc Spot Trainer trong production.
   Chạy `python scripts/check_source_manifest.py` để kiểm tra. Sau khi chủ động sửa
   local adaptations, dùng `python scripts/refresh_port_manifest.py` rồi kiểm tra lại;
   source snapshot hashes được giữ nguyên.
+  Launcher dùng `python scripts/check_source_manifest.py --runtime`: vẫn kiểm tra
+  hash của helper, GRPO/pretraining và TLT core, nhưng không yêu cầu snapshot lưu trữ
+  hoặc hash script/config vận hành. Lệnh không có `--runtime` vẫn audit đầy đủ.
 
 SpecNaacl chỉ được dùng lúc port hoặc làm đường dẫn weights/data; không runtime-import
 source sibling. Có thể đặt weights/data ở bất kỳ nơi nào và chạy chỉ folder TltReflex.
