@@ -50,6 +50,10 @@ def parser():
     p.add_argument('--fast-lrs',default='0.01');p.add_argument('--streams',default='1')
     for name,default in [('responses',8),('iterations',2),('warmup',1),('max-length',512),('max-prompt-length',256),('rank',8),('topk',16),('draft-accumulation-steps',1)]:
         p.add_argument('--'+name,type=int,default=default)
+    for name,default in [('verification-capacity',512),('max-draft-token-length',5),('max-draft-k',8),
+                         ('max-verification-num',160),('min-draft-token-length',3)]:
+        p.add_argument('--'+name,type=int,default=int(os.getenv(name.upper().replace('-', '_'), default)))
+    p.add_argument('--draft-token-length-c',type=float,default=float(os.getenv('DRAFT_TOKEN_LENGTH_C', '.75')))
     p.add_argument('--temperature',type=float,default=1.);p.add_argument('--top-p',type=float,default=.95)
     p.add_argument('--top-k',type=int,default=0);p.add_argument('--draft-lr',type=float,default=1e-4)
     p.add_argument('--visited-weight',type=float,default=1.);p.add_argument('--frontier-weight',type=float,default=1.)
@@ -70,6 +74,9 @@ def parse_args(argv=None):
     if not a.seeds or not a.batch_sizes or min(a.batch_sizes+a.streams)<0 or any(x<1 for x in a.batch_sizes):p.error('positive batch sizes, nonempty seeds required')
     if not a.fast_lrs or min(a.fast_lrs)<0 or not set(a.streams)<={0,1}:p.error('LR>=0 and streams 0/1 required')
     if min(a.responses,a.iterations,a.max_length,a.max_prompt_length,a.rank,a.topk,a.draft_accumulation_steps)<1 or a.warmup<0:p.error('positive sizes, warmup>=0 required')
+    if min(a.verification_capacity,a.max_draft_token_length,a.max_draft_k,a.min_draft_token_length)<1 or a.max_verification_num<2 or a.draft_token_length_c<=0:
+        p.error('invalid verification/adaptive limits')
+    if a.min_draft_token_length>a.max_draft_token_length:p.error('minimum draft depth exceeds maximum')
     if not a.tiny and not all((a.target_model,a.draft_checkpoint,a.dataset_path)):p.error('real target/draft/dataset paths required (or explicit --tiny fixture)')
     if a.profile and a.online_draft:p.error('--profile is a separate frozen replay; run online-draft measurement separately')
     return a
@@ -86,7 +93,10 @@ def canonical_config(args,batch,seed,method,lr,stream):
         batch_size=batch,responses=args.responses,seed=seed,temperature=args.temperature,top_p=args.top_p,top_k=args.top_k,
         dtype=args.dtype,attention=args.attn_implementation,max_length=args.max_length,max_prompt_length=args.max_prompt_length,
         warmup=args.warmup,measured_iterations=args.iterations,tlt=asdict(TLTConfig.from_env()),profiling_replay=args.profile,
-        sampler_mode=os.getenv('OPD_SAMPLER_MODE','strict'),
+        sampler_mode=os.getenv('OPD_SAMPLER_MODE','finite'),
+        draft_limits=dict(verification_capacity=args.verification_capacity,max_draft_token_length=args.max_draft_token_length,
+            max_draft_k=args.max_draft_k,max_verification_num=args.max_verification_num,
+            min_draft_token_length=args.min_draft_token_length,draft_token_length_c=args.draft_token_length_c),
         training=dict(online_draft=args.online_draft,objective='fastgrpo_smoothl1_2_ce_0.1',lr=args.draft_lr,
             optimizer='AdamW',accumulation=args.draft_accumulation_steps,update_cadence='existing draft optimizer boundary',target_frozen=True),
         verifier='SpecNaacl FastGRPO PackedTree/sample-once token matching',cuda_graph=False,
@@ -102,6 +112,15 @@ def config_diff(a,b):
     keys=set(a)|set(b);difference={key:dict(tlt=a.get(key),tlt_opd_reflex=b.get(key)) for key in keys if a.get(key)!=b.get(key)}
     if set(difference)-{'opd'}:raise ValueError('unfair pair config: '+str(set(difference)-{'opd'}))
     return dict(only_opd_differences=True,differences=difference,baseline=a,reflex=b)
+
+
+def validate_opd_experiment(output, method):
+    if method == 'tlt_opd_reflex':
+        if output.get('tlt_speculative_rounds', 0) <= 0:
+            raise ValueError('invalid OPD experiment: no speculative rounds; set TLT_BS_THRESHOLD to initial live batch '
+                             'and TLT_SD_WARMUP_CHECKS=1, and allow enough decoding rounds')
+        if output.get('opd_feedback_calls', 0) <= 0 or output.get('opd_selected_states', 0) <= 0:
+            raise ValueError('invalid OPD experiment: no OPD feedback states')
 
 
 def load_model(args,method):
@@ -158,6 +177,18 @@ def make_batches(args,tokenizer,batch):
 
 
 def benchmark(args):
+    if args.dry_run:
+        return _benchmark(args)
+    from helper import opd_sampling
+    previous = opd_sampling.SAMPLER_MODE
+    opd_sampling.SAMPLER_MODE = os.getenv('OPD_SAMPLER_MODE', 'finite')
+    try:
+        return _benchmark(args)
+    finally:
+        opd_sampling.SAMPLER_MODE = previous
+
+
+def _benchmark(args):
     destination=Path(args.output);destination.mkdir(parents=True,exist_ok=True)
     plan=[]
     for batch in args.batch_sizes:
@@ -206,6 +237,9 @@ def benchmark(args):
                     output=speculative_generate(model,entry['input_ids'],entry['attention_mask'],tokenizer,
                         method=method,tlt_scheduler=scheduler,do_sample=True,repeated_generate_nums=args.responses,
                         temperature=args.temperature,top_p=args.top_p,top_k=args.top_k or None,max_length=args.max_length,
+                        verification_capacity=args.verification_capacity,max_draft_token_length=args.max_draft_token_length,
+                        max_draft_k=args.max_draft_k,max_verification_num=args.max_verification_num,
+                        min_draft_token_length=args.min_draft_token_length,draft_token_length_c=args.draft_token_length_c,
                         return_all_draft_input=args.online_draft,statistical_time=False,opd_rank=args.rank,opd_topk=args.topk,
                         opd_fast_lr=lr,opd_update_stream=bool(stream),opd_visited_weight=args.visited_weight,
                         opd_frontier_weight=args.frontier_weight,opd_train_projector=args.online_draft,opd_profile=profile)
@@ -236,11 +270,14 @@ def benchmark(args):
                     output,times=time_generation_and_training(lambda:rollout(entry,seed+i,scheduler,opt,i),train,
                         synchronize=torch.cuda.synchronize)
                     wall=times['generation_wall_s']
+                    validate_opd_experiment(output, method)
                     forwards={k:counts[k]-before[k] for k in counts}
                     if forwards['target']!=1+output['batch_verification_rounds']:raise AssertionError('extra target transformer forward')
                     row=dict(method=method,batch_size=batch,seed=seed+i,case_seed=seed,iteration=i,fast_lr=lr,stream=stream,run_position=position,
                         prompt_sha256=digest.hexdigest(),**times,generated_tokens=sum(output['response_generated_tokens']),
                         aal=output['effective_aal'],effective_aal=output['effective_aal'],speculative_aal=output['speculative_aal'],
+                        target_only_rounds=output['target_only_rounds'], speculative_rounds=output['speculative_rounds'],
+                        speculative_round_ratio=output['speculative_round_ratio'],
                         verification_rounds=output['total_decoded_token_num'],batch_verification_rounds=output['batch_verification_rounds'],
                         accepted_draft_tokens=output['total_accepted_draft_tokens'],proposed_draft_tokens=output['total_proposed_draft_tokens'],
                         acceptance_rate=output['draft_acceptance_rate'],target_forwards=forwards['target'],draft_forwards=forwards['draft'],

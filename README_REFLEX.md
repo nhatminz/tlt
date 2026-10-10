@@ -50,19 +50,27 @@ bitwise khi cùng captured features. So target-only histories với target prefi
 
 | Biến | Default |
 |---|---|
-| `TLT_BS_THRESHOLD` | 32 live responses |
-| `TLT_SD_WARMUP_CHECKS` | 10 consecutive decode checks |
-| `TLT_MAB_CONFIGS` | `8_4_48,8_4_32,8_4_16,8_4_8` |
+| `TLT_BS_THRESHOLD` | `auto`: initial live responses của từng rollout |
+| `TLT_SD_WARMUP_CHECKS` | 1 target-only round |
+| `TLT_MAB_CONFIGS` | 16 explicit arms, hai arm cho mỗi verify budget 2/4/8/16/32/64/128/160 |
+| `TLT_SCHEDULING_MODE` | `budget_aware_beg` |
+| `VERIFICATION_CAPACITY` | 512 total verification tokens per round |
 | `TLT_MAB_ALGORITHM` | `BEG` |
-| `TLT_MAB_BS_THRESHOLDS` | `1,2,5,21` |
+| `TLT_MAB_BS_THRESHOLDS` | `1,3,5,9,17,33,65,129` |
 | `TLT_MAB_WINDOW_SIZE` | 1000 |
 | `TLT_MAB_SEED` | training subset seed, default 42 |
 | `TLT_STRATEGY_TRACE` | training: `<run>/strategy_trace.jsonl` |
 | `TLT_STRATEGY_REPLAY` | empty; optional exact trace path |
 
 `8_4_32` -> depth 8, K4, verification_num32, total_draft31.
-Không gọi native `get_adaptive_hyperparameters` trong TLT mode.
-Capacity được tính từ `min(initial live batch, TLT_BS_THRESHOLD)` × max verification_num.
+`budget_aware_beg` giữ MAB/reward gốc, nhưng chỉ chọn nguyên arm có
+`live_batch * verification_num <= VERIFICATION_CAPACITY` và depth/K/verify nằm trong `MAX_*` truyền vào runtime. Nếu bucket ưu tiên
+không vừa, chọn bucket hợp lệ lớn nhất; không clamp depth/K/token của arm.
+`fastgrpo_matched` gọi trực tiếp `get_adaptive_hyperparameters()` của FastGRPO
+với capacity và MAX/MIN limits được truyền vào rollout, giống SpecNaacl.
+Defaults: depth5/K8/max_verify160/min_depth3/C0.75, capacity512.
+Threshold mặc định tự bằng initial live batch của mỗi rollout; warmup1 transition sau target-only
+round đầu tiên và SD bắt đầu ở round tiếp theo. Không nhân threshold để cấp capacity.
 Scratch chỉ khởi tạo sau round pending transition, theo batch thực tế còn sống;
 target-only không tạo PackedTree, tree mask hoặc OPD scratch.
 Invalid candidate counts hoặc capacity override quá nhỏ fail rõ ràng; không clamp strategy.
@@ -74,7 +82,11 @@ Timing boundary speculative chung gồm proposal, verification, OPD feedback n�
 compaction và draft append. Dùng CUDA stream events và chỉ chờ event để đọc reward;
 không synchronize toàn device. Draft-only transition prefill đo riêng và nằm ngoài reward.
 Target-only dùng direct one-token target forward, sampler giữ nguyên và packet EOS/compaction.
-Metrics tách `effective_aal` (mọi round) và `speculative_aal` (chỉ SD). Đây là implementation ưu tiên correctness; chưa claim tối ưu throughput.
+Metrics tách `effective_aal` (mọi round) và `speculative_aal` (chỉ SD).
+CSV/summary ghi `target_only_rounds`, `speculative_rounds`, `speculative_round_ratio`.
+Trace JSONL ghi `actual_draft_depth`, `actual_draft_k`, `actual_verify_tokens` (tổng live batch),
+`actual_verify_tokens_per_response`, `selected_mab_strategy` mỗi round.
+TLT cảnh báo khi không có SD hoặc ratio < `TLT_MIN_SPECULATIVE_ROUND_RATIO` (default 0.5). Đây là implementation ưu tiên correctness; chưa claim tối ưu throughput.
 
 ## Training và OPD
 
@@ -141,11 +153,11 @@ Validator kiểm tra bounded API families rồi chạy thật draft pretrain/bac
 AdamW/scheduler, target decoder/cache, PEFT LoRA/state và checkpoint roundtrip.
 `--strict-versions` yêu cầu exact pins. Không tự cài hoặc downgrade thư viện.
 
-`OPD_SAMPLER_MODE=strict` là default cho cả `tlt` và `tlt_opd_reflex`.
-`finite` là opt-in, dùng nguyên implementation SpecNaacl: device assertion cho
+`OPD_SAMPLER_MODE=finite` là default cấu hình cho cả `tlt` và `tlt_opd_reflex`.
+Có thể override `strict` để dùng validation/fallback cũ. `finite` dùng nguyên implementation SpecNaacl: device assertion cho
 nonfinite sampled logits, không host scalar reads/dynamic valid-row compaction.
 Đặt biến trước khi khởi động process; pair config ghi sampler mode trong phần
-shared và reject nếu hai method khác mode. B200 cần validate trước khi opt-in.
+shared và reject nếu hai method khác mode. Kiểm tra runtime trên stack B200 trước benchmark.
 
 Online-draft benchmark tách `generation_wall_s`, `draft_training_wall_s`,
 `combined_wall_s`, `generation_tokens_per_s`, `combined_tokens_per_s`.
@@ -153,3 +165,13 @@ Online-draft benchmark tách `generation_wall_s`, `draft_training_wall_s`,
 theo cadence gốc. Hai wall intervals nối tiếp, không double-count.
 `target_time_cost` khi `statistical_time=True` gồm cả target-only forwards;
 profiling tắt không thêm event wait.
+
+Benchmark ghi `actual_depth`, `actual_k`, `verification_num` (mỗi response), và
+`verification_tokens` (tổng round) trong `strategy_trace.jsonl` (run và aggregate).
+OPD experiment fail nếu không có SD rounds hoặc không có feedback states, kể cả
+ablation LR0; LR0 được phép có zero updates. Fingerprint scheduler/rollout thay đổi:
+tune lại TLT-native proposal profile trên GPU chạy benchmark.
+
+Nhánh OFF dùng cùng raw FP32 scan/merge và low-ID tie ordering như OPD khi B=0,
+để LR0 không bị lệch vì softmax BF16 hoặc `torch.topk` tie ordering. Không cấp A/B
+hoặc feedback state cho OFF; kernel OPD và target verifier giữ nguyên.

@@ -34,6 +34,31 @@ Offline có thể set `WHEELHOUSE=/path/to/new-compatible-wheels`.
 
 ## 2. Paths/config dùng chung
 
+Hai scheduling modes dùng chung cho cả hai methods:
+`TLT_SCHEDULING_MODE=budget_aware_beg` (default) lọc nguyên MAB arm theo capacity;
+`TLT_SCHEDULING_MODE=fastgrpo_matched` gọi đúng hàm adaptive của SpecNaacl với MAX/MIN
+limits trong rollout. Custom BEG arms là cấu hình explicit, không bị clamp theo MAX.
+Để SD sớm, set threshold bằng initial live batch (= prompts × responses), warmup1.
+Workspace giữ envelope cho toàn rollout; tổng verification tokens mỗi round ≤512.
+
+Với matched mode và defaults5/8/160/512/min3/C0.75:
+
+| Live batch | Depth | K | Verify/response | Tổng verification tokens |
+|---|---|---|---|---|
+|128|3|3|4|512|
+|64|3|7|8|512|
+|32|4|8|16|512|
+|16|5|8|32|512|
+|8|5|8|64|512|
+|4|5|8|128|512|
+|2|5|8|160|320|
+|1|5|8|160|160|
+
+Benchmark ghi actual depth/K/verify tổng mỗi round trong `strategy_trace.jsonl`.
+Measured OPD rollout thiếu speculative rounds hoặc feedback states sẽ fail rõ ràng;
+LR0 vẫn phải có feedback, nhưng được phép zero updates. Fingerprint mới yêu cầu
+tune lại TLT-native profile trên GPU/server thực tế.
+
 ```bash
 export MODEL_KEY=qwen25_3b
 export MODEL=/workspace/storage-shared/models/Qwen2.5-3B-Instruct
@@ -45,11 +70,14 @@ export TARGET_ADAPTER=""
 export TARGET_LR=1e-6 DRAFT_LR=1e-4
 export BATCH_SIZE=8 ACCUMULATION_STEPS=4 DRAFT_ACCUMULATION_STEPS=1
 export RESPONSES_PER_PROMPT=8 TRAIN_SUBSET_SEED=42
-export TLT_BS_THRESHOLD=32 TLT_SD_WARMUP_CHECKS=10
-export TLT_MAB_CONFIGS=8_4_48,8_4_32,8_4_16,8_4_8
-export TLT_MAB_ALGORITHM=BEG TLT_MAB_BS_THRESHOLDS=1,2,5,21
+export TLT_BS_THRESHOLD=auto TLT_SD_WARMUP_CHECKS=1
+export TLT_SCHEDULING_MODE=budget_aware_beg
+unset TLT_MAB_CONFIGS TLT_MAB_BS_THRESHOLDS  # Dùng đầy đủ budget buckets mới của TLT
+export VERIFICATION_CAPACITY=512 MAX_DRAFT_TOKEN_LENGTH=5 MAX_DRAFT_K=8
+export MAX_VERIFICATION_NUM=160 MIN_DRAFT_TOKEN_LENGTH=3 DRAFT_TOKEN_LENGTH_C=0.75
+export TLT_MAB_ALGORITHM=BEG
 export TLT_MAB_SEED=42
-export OPD_SAMPLER_MODE=strict
+export OPD_SAMPLER_MODE=finite
 export OPD_RANK=8 OPD_TOPK=16 OPD_FAST_LR=0.01
 export OPD_UPDATE_STREAM=1 OPD_TRAIN_PROJECTOR=1
 export OPD_PROPOSAL_MODE=auto OPD_DENSE_IMPLEMENTATION=auto
@@ -80,8 +108,8 @@ cách tính OPD; profile dispatch chỉ quyết định implementation kernel.
 ## 4. GPU smoke ba cấu hình trên cùng weights/prompts
 
 Đây là frozen rollout smoke, chưa update target/draft. Nếu muốn kiểm tra online draft,
-thêm `--online-draft`. Mỗi lệnh dùng fresh model/checkpoint; B reset mỗi rollout. Với warmup checks10,
-round10 vẫn target-only, prefill drafter sau round10 và round11 mới speculative.
+thêm `--online-draft`. Mỗi lệnh dùng fresh model/checkpoint; B reset mỗi rollout. Với warmup checks1,
+round1 vẫn target-only, prefill drafter sau round1 và round2 mới speculative.
 
 ```bash
 export BENCH_BATCH_SIZES=1 BENCH_SEEDS=42 BENCH_ITERATIONS=1 BENCH_WARMUP=1
@@ -160,20 +188,20 @@ python -m pytest -q
 ```
 
 Sau khi đổi code/runtime adapter, phải tune lại nếu execution fingerprint không
-khớp. Tuner và model/data paths ở trên giữ nguyên. Strict là production default.
-Để thử finite sau validation trên B200, set **cùng một mode** cho cả hai process:
+khớp. Tuner và model/data paths ở trên giữ nguyên. Finite là default cấu hình mới.
+Cả hai process phải dùng **cùng một mode**:
 
 ```bash
 export OPD_SAMPLER_MODE=finite
 METHOD=tlt BENCH_OUTPUT="$PWD/outputs/smoke/finite_tlt" bash run_benchmark.sh
 METHOD=tlt_opd_reflex OPD_FAST_LRS=0 BENCH_OUTPUT="$PWD/outputs/smoke/finite_zero" bash run_benchmark.sh
 METHOD=tlt_opd_reflex OPD_FAST_LRS=0.01 BENCH_OUTPUT="$PWD/outputs/smoke/finite_live" bash run_benchmark.sh
-export OPD_SAMPLER_MODE=strict
+export OPD_SAMPLER_MODE=finite
 ```
 
 Finite không thực hiện fallback cho sampled logits NaN/Inf; device assertion fail
-thay vì thay target distribution. Production default chỉ đổi sau khi tự xác minh
-stack/GPU B200 thật.
+thay vì thay target distribution. Cấu hình mặc định hiện dùng finite cho cả hai methods; có thể override strict.
+Kiểm tra runtime trên stack/GPU B200 thật trước benchmark.
 
 `BENCH_ONLINE_DRAFT=1` giữ objective/accumulation/optimizer cadence gốc và report
 riêng generation/training/combined wall time. `tokens_per_s` và

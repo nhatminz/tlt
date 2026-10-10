@@ -12,7 +12,7 @@ source "$MODEL_ENV"
 # updated together. Keep defaults here too, before ANY expansion under set -u.
 # An explicit environment/config override always takes precedence.
 export ROLLOUT_LOG_FLUSH_INTERVAL="${ROLLOUT_LOG_FLUSH_INTERVAL:-1}"
-export OPD_SAMPLER_MODE="${OPD_SAMPLER_MODE:-strict}"
+export OPD_SAMPLER_MODE="${OPD_SAMPLER_MODE:-finite}"
 export OPD_PROJECTOR_LR="${OPD_PROJECTOR_LR:-}"
 export OPD_PROPOSAL_PROFILE="${OPD_PROPOSAL_PROFILE:-}"
 export OPD_PROPOSAL_MODE="${OPD_PROPOSAL_MODE:-auto}"
@@ -214,7 +214,7 @@ mkdir -p "$LOG_DIR" "$CHECKPOINT_DIR" "$RUN_DIR/statistics"
 mkdir -p "$TRAIN_MODEL_ROOT"
 ln -sfn "$RUN_DIR" "$TRAIN_MODEL_ROOT/active_run"
 "$PYTHON_BIN" "$PROJECT_DIR/scripts/write_run_metadata.py" --run-dir "$RUN_DIR" --kind train \
-  --item "tlt_description=TLT adaptive rollout + FastGRPO drafter" --item "tlt_bs_threshold=$TLT_BS_THRESHOLD" --item "tlt_warmup=$TLT_SD_WARMUP_CHECKS" --item "tlt_strategies=$TLT_MAB_CONFIGS" --item "tlt_mab_seed=$TLT_MAB_SEED" --item "run_name=$RUN_NAME" --item "model=$MODEL" --item "dataset=$DATASET_PATH" \
+  --item "tlt_description=TLT adaptive rollout + FastGRPO drafter" --item "tlt_scheduling_mode=${TLT_SCHEDULING_MODE:-budget_aware_beg}" --item "tlt_bs_threshold=$TLT_BS_THRESHOLD" --item "tlt_warmup=$TLT_SD_WARMUP_CHECKS" --item "tlt_strategies=$TLT_MAB_CONFIGS" --item "tlt_mab_seed=$TLT_MAB_SEED" --item "run_name=$RUN_NAME" --item "model=$MODEL" --item "dataset=$DATASET_PATH" \
   --item "draft_checkpoint=$DRAFT_CHECKPOINT" --item "draft_architecture=FastGRPO" \
   --item "target_adapter=$TARGET_ADAPTER" \
   --item "target_lr=$TARGET_LR" --item "draft_lr=$DRAFT_LR" \

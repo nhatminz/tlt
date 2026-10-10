@@ -179,8 +179,8 @@ def test_finite_sampler_is_cuda_graph_capturable(top_p, top_k):
     assert output[0].shape == (2, 3)
 
 
-def test_default_keeps_strict_and_strict_body_is_unchanged():
-    assert opd_sampling.SAMPLER_MODE == 'strict'
+def test_sampler_respects_config_and_strict_body_is_unchanged():
+    assert opd_sampling.SAMPLER_MODE == os.getenv('OPD_SAMPLER_MODE', 'strict')
     new_tree = ast.parse(Path(opd_sampling.__file__).read_text())
     old_tree = ast.parse(REFERENCE.read_text())
     new = next(n for n in new_tree.body if isinstance(n, ast.FunctionDef) and n.name == '_sampling_strict')

@@ -1,4 +1,5 @@
 import os
+os.environ.setdefault('OPD_SAMPLER_MODE', 'finite')
 import sys
 import random
 import time
@@ -351,7 +352,7 @@ parser.add_argument('--max_training_padding_gap',type=int,default=256)
 parser.add_argument('--max_training_token',type=int,default=3072)
 parser.add_argument('--logps_chunk_size', type=int, default=256,
                     help='Sequence chunk size for token-logprob computation. Lower values reduce peak VRAM.')
-parser.add_argument('--verification_capacity', type=int, default=160)
+parser.add_argument('--verification_capacity', type=int, default=512)
 parser.add_argument('--max_draft_token_length', type=int, default=5)
 parser.add_argument('--max_draft_k', type=int, default=8)
 parser.add_argument('--max_verification_num', type=int, default=160)
@@ -2117,6 +2118,10 @@ final_accepted_tokens_per_medusa_step = final_metrics['accepted_tokens_per_medus
 summary = {
     "architecture": "TLT adaptive rollout + FastGRPO drafter",
     "effective_aal": float(final_average_accept_length),
+    "target_only_rounds": rollout_metrics.state.get('tlt_target_only_rounds',0),
+    "speculative_rounds": rollout_metrics.state.get('tlt_speculative_rounds',0),
+    "speculative_round_ratio": rollout_metrics.state.get('tlt_speculative_rounds',0)/max(
+        rollout_metrics.state.get('tlt_target_only_rounds',0)+rollout_metrics.state.get('tlt_speculative_rounds',0),1),
     "speculative_aal": rollout_metrics.state.get('tlt_speculative_accepted_length',0)/max(rollout_metrics.state.get('tlt_speculative_response_rounds',0),1),
     "tlt_cumulative_metrics": {k:v for k,v in rollout_metrics.state.items() if k.startswith('tlt_')},
     "tlt_last_rollout": model._tlt_scheduler.finish() if model._tlt_scheduler.rollout_id >= 0 else None,

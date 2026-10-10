@@ -57,7 +57,7 @@ def test_source_architecture_and_opd_are_exact_snapshots():
     assert (ROOT/'helper/tlt_mab.py').read_bytes()==(ROOT/'sources/FastRL/eagle_mab.py').read_bytes()
 
 
-def test_mapping_gating_capacity_and_no_native_adaptive_call():
+def test_mapping_gating_and_dynamic_capacity():
     s=Strategy.parse('8_4_32');assert (s.depth,s.k,s.total_draft)==(8,4,31)
     gate=AdaptiveTail(32,3)
     assert [gate.check(b) for b in [64,32,31,64,30,10,1]]==[False]*7
@@ -65,8 +65,11 @@ def test_mapping_gating_capacity_and_no_native_adaptive_call():
     gate.complete_transition();assert gate.check(64)
     for n in (48,32,16,8):assert Strategy.parse(f'8_4_{n}').total_draft==n-1
     with pytest.raises(ValueError,match='available'):Strategy.parse('1_4_48')
-    sch=TLTScheduler();assert sch.start_rollout(64)==1536
-    with pytest.raises(ValueError,match='no strategy clamping'):sch.start_rollout(64,160)
+    sch=TLTScheduler(TLTConfig(strategies='5_8_160,5_8_64,4_8_16,3_3_4',buckets=(1,2,5,21)))
+    assert sch.start_rollout(64)==512
+    assert sch.start_rollout(64,160)==160
+    sch.gate.check(64);sch.gate.complete_transition()
+    with pytest.raises(ValueError,match='no strategy clamping'):sch.select(64)
     tree=ast.parse((ROOT/'helper/tlt_generate.py').read_text())
     assert not any(isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='get_adaptive_hyperparameters' for n in ast.walk(tree))
 
@@ -75,8 +78,8 @@ def test_mab_selection_reward_metrics_reference_and_rng_state():
     path=ROOT/'sources/FastRL/eagle_mab.py'
     spec=importlib.util.spec_from_file_location('fastrl_ref',path);ref=importlib.util.module_from_spec(spec);spec.loader.exec_module(ref)
     configs='8_4_48,7_4_48,8_4_32,7_4_32,8_4_16,7_4_16,8_4_8,7_4_8'
-    cfg=TLTConfig(warmup_checks=1,strategies=configs)
-    s=TLTScheduler(cfg);s.start_rollout(32)
+    cfg=TLTConfig(warmup_checks=1,strategies=configs,buckets=(1,2,5,21))
+    s=TLTScheduler(cfg);s.start_rollout(32,max_draft_token_length=8)
     s.gate.check(32);s.gate.complete_transition()
     reference=ref.MABGroupManager(configs.split(','),'BEG',1000,[1,2,5,21])
     private=np.random.RandomState(42)
@@ -112,7 +115,7 @@ def test_off_never_initializes_opd_and_no_extra_target_forward(monkeypatch,famil
     assert min(drafts)==3
     assert counts['target']==1+out['batch_verification_rounds']
     assert out['tlt_target_only_rounds']==3 and out['tlt_sd_transition_count']==1
-    assert all(row['verification_num']==32 for row in out['tlt_strategy_trace'][3:])
+    assert all(row['verification_tokens']<=512 for row in out['tlt_strategy_trace'][3:])
 
 
 @CUDA
@@ -195,9 +198,9 @@ def test_on_zero_lr_positive_lr_training_and_b_reset(stream):
 def test_depth8_k4_buffer_bounds_same_budget_and_replay(tmp_path,verify,fast_lr):
     cfg=TLTConfig(warmup_checks=2,strategies=f'8_4_{verify}',buckets=(1,))
     model=tiny();trace=tmp_path/'strategy_trace.jsonl'
-    baseline=run(model,config=cfg,tlt_scheduler=TLTScheduler(cfg,trace_path=str(trace)))
+    baseline=run(model,config=cfg,max_draft_token_length=8,tlt_scheduler=TLTScheduler(cfg,trace_path=str(trace)))
     other=tiny()
-    reflex=run(other,'tlt_opd_reflex',config=cfg,opd_fast_lr=fast_lr,tlt_scheduler=TLTScheduler(cfg,replay_path=str(trace)))
+    reflex=run(other,'tlt_opd_reflex',config=cfg,max_draft_token_length=8,opd_fast_lr=fast_lr,tlt_scheduler=TLTScheduler(cfg,replay_path=str(trace)))
     a,b=baseline[0],reflex[0]
     assert a['tlt_strategy_trace'] and b['tlt_strategy_trace']
     for x,y in zip(a['tlt_strategy_trace'],b['tlt_strategy_trace']):
@@ -270,7 +273,10 @@ class ReferenceScheduler(TLTScheduler):
 def test_fast_path_and_transition_match_previous_verifier_tokens_rng_hidden_and_kv(monkeypatch,family,threshold):
     from unittest.mock import patch
     import helper.tlt_generate as runtime
-    cfg=TLTConfig(bs_threshold=threshold,warmup_checks=3)
+    # Single-arm buckets keep scheduling identical while comparing verifier/KV
+    # implementations; performance learning is tested independently above.
+    cfg=TLTConfig(bs_threshold=threshold,warmup_checks=3,
+                  strategies='5_8_160,5_8_64,4_8_16,3_3_4',buckets=(1,2,5,21))
     reference=slow_reference()
     captured={}
     def execute(generate,model,scheduler,label):

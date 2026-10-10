@@ -100,10 +100,10 @@ def test_pending_prefill_outside_mab_events_and_tail_capacity(monkeypatch,method
     assert output['tlt_target_only_rounds']==3
     assert output['tlt_sd_transition_count']==1 and output['tlt_transition_draft_prefill_s']>0
     assert output['tlt_speculative_workspace_batch']<=4
-    assert output['tlt_verification_capacity']==192
+    assert output['tlt_verification_capacity']==512
     assert all(row['reward'] is None for row in output['tlt_strategy_trace'][:3])
     if method=='tlt_opd_reflex':
-        assert allocated==[(4,192)] and output['opd_overhead_ms']>0
+        assert allocated==[(4,512)] and output['opd_overhead_ms']>0
         assert model._opd_runtime_cache[next(iter(model._opd_runtime_cache))].B_fast.count_nonzero()==0
     assert output['no_extra_target_forward']
     # No elapsed-time event wait in target-only rounds when diagnostics off.
@@ -170,10 +170,10 @@ def test_large_batch_shrinks_before_lazy_tail_allocation_and_keeps_pending_a_gra
     out=runtime.speculative_generate(model,torch.tensor([[3,5,7]]*32),torch.ones(32,3,dtype=torch.long),
         SimpleNamespace(eos_token_id=96),method=method,tlt_scheduler=scheduler,do_sample=True,
         repeated_generate_nums=2,max_length=18,temperature=.8,top_p=.95,return_all_draft_input=True)
-    assert out['tlt_max_live']==32 and out['tlt_verification_capacity']==32*48
+    assert out['tlt_max_live']==32 and out['tlt_verification_capacity']==512
     assert out['tlt_speculative_workspace_batch']==2
     assert len(out['generated_token_ids'])==64
     if method=='tlt_opd_reflex':
-        assert allocations==[(2,96)]
+        assert allocations==[(2,320)]
         torch.testing.assert_close(before,model.opd_projector_grad_sum,rtol=0,atol=0)
         assert model.opd_projector_grad_weight.item()==3.

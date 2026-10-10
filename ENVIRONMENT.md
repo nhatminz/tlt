@@ -15,5 +15,6 @@ Transformers4.51.3 dùng API native; 5.12.1 dùng adapter trong
 `helper/transformers_compat.py`. Không đổi draft architecture/attention/loss/RNG.
 Không auto-install, auto-downgrade hoặc bỏ API probes.
 
-`OPD_SAMPLER_MODE=strict` default; `finite` opt-in sau validation trên GPU B200.
+`OPD_SAMPLER_MODE=finite` default trong training/benchmark config của cả hai methods.
+Override `strict` để dùng validation/fallback cũ; chạy validator trên GPU B200 thật.
 Chạy cả hai method bằng cùng sampler mode. B200 commands ở RUN_TLT_OPD.md.

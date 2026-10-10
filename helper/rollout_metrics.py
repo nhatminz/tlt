@@ -15,7 +15,9 @@ FIELDS=('global_iter','epoch','batch_iter','method','grpo_step','used_items','el
     'iter_aal','cumulative_aal','iter_generation_time_s','cumulative_generation_time_s','cumulative_wall_time_s',
     'iter_rollout_tokens','cumulative_rollout_tokens','iter_verification_rounds','cumulative_verification_rounds',
     'iter_acceptance_rate','cumulative_acceptance_rate','iter_target_forwards','iter_draft_forwards',
-    'iter_effective_aal','iter_speculative_aal','cumulative_speculative_aal','iter_opd_overhead_ms')+tuple('iter_opd_'+s for s in OPD_FIELDS)+KV_FIELDS+tuple('iter_tlt_'+s for s in TLT_FIELDS)
+    'iter_effective_aal','iter_speculative_aal','cumulative_speculative_aal','iter_opd_overhead_ms',
+    'target_only_rounds','speculative_rounds','speculative_round_ratio',
+    'cumulative_speculative_round_ratio','speculative_aal','effective_aal')+tuple('iter_opd_'+s for s in OPD_FIELDS)+KV_FIELDS+tuple('iter_tlt_'+s for s in TLT_FIELDS)
 
 
 class RolloutMetricsWriter:
@@ -91,8 +93,15 @@ class RolloutMetricsWriter:
         row['iter_target_forwards']=o.get('target_forwards','')
         row['iter_draft_forwards']=o.get('draft_forwards','')
         row['iter_effective_aal']=row['iter_aal']
+        row['target_only_rounds']=o.get('tlt_target_only_rounds',0)
+        row['speculative_rounds']=o.get('tlt_speculative_rounds',0)
+        row['speculative_round_ratio']=ratio(row['speculative_rounds'],row['target_only_rounds']+row['speculative_rounds'])
+        row['cumulative_speculative_round_ratio']=ratio(self.state['tlt_speculative_rounds'],
+            self.state['tlt_speculative_rounds']+self.state['tlt_target_only_rounds'])
         row['iter_speculative_aal']=ratio(o.get('tlt_speculative_accepted_length',0),o.get('tlt_speculative_response_rounds',0))
         row['cumulative_speculative_aal']=ratio(self.state['tlt_speculative_accepted_length'],self.state['tlt_speculative_response_rounds'])
+        row['speculative_aal']=row['iter_speculative_aal']
+        row['effective_aal']=row['iter_effective_aal']
         row['iter_opd_overhead_ms']=o.get('opd_overhead_ms','')
         if self.method in ('fastgrpo','opd_reflex','tlt','tlt_opd_reflex'):
             row['iter_host_syncs']=o.get('opd_host_syncs',0)

@@ -12,7 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from helper.opd_profiles import (active_trials,context_shapes,execution_key,fingerprint,
     inspect_draft,profile_filename,discover_profile,validate_profile)
-from helper.tlt_scheduler import TLTConfig
+from helper.tlt_scheduler import TLTConfig, DEFAULT_STRATEGIES, parse_threshold
 
 DEFAULT_MODELS=('qwen25_1p5b','qwen25_3b','qwen25_7b','qwen25_14b','qwen3_1p7b','qwen3_4b')
 
@@ -22,7 +22,7 @@ def tail_workload(batch,responses,threshold,strategies,points=7):
     from dataclasses import replace
     config=replace(config,bs_threshold=threshold,strategies=strategies)
     selected=config.validate()
-    live=min(batch*responses,threshold)
+    live=batch*responses if threshold is None else min(batch*responses,threshold)
     if live<1:raise ValueError('TLT threshold=0 never enables OPD; no proposal workload to tune')
     k=max(s.k for s in selected)
     return live,k,context_shapes(live,1,k,points)
@@ -166,8 +166,8 @@ def parse_args(argv=None):
     p.add_argument('--topk',type=int,default=16);p.add_argument('--shapes');p.add_argument('--slots')
     p.add_argument('--batch-size',type=int,default=8);p.add_argument('--responses',type=int,default=8)
     p.add_argument('--max-draft-k',type=int,default=8);p.add_argument('--context-points',type=int,default=7)
-    p.add_argument('--tlt-bs-threshold',type=int,default=int(os.getenv('TLT_BS_THRESHOLD','32')))
-    p.add_argument('--tlt-strategies',default=os.getenv('TLT_MAB_CONFIGS','8_4_48,8_4_32,8_4_16,8_4_8'))
+    p.add_argument('--tlt-bs-threshold',type=parse_threshold,default=os.getenv('TLT_BS_THRESHOLD','auto'))
+    p.add_argument('--tlt-strategies',default=os.getenv('TLT_MAB_CONFIGS',DEFAULT_STRATEGIES))
     p.add_argument('--active-points',type=int,default=8);p.add_argument('--iterations',type=int,default=30)
     p.add_argument('--force',action='store_true');p.add_argument('--inspect-only',action='store_true')
     a=p.parse_args(argv)

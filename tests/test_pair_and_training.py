@@ -36,7 +36,10 @@ def test_paired_model_launchers_share_configs_and_source_paths(tmp_path,key):
         pairs={command[i]:command[i+1] for i in range(len(command)-1) if command[i].startswith('--')}
         commands.append(pairs)
         assert 'SpecNaacl/outputs/pretrain' in pairs['--adapter_path']
-        assert pairs['--max_draft_token_length']=='8'
+        assert pairs['--max_draft_token_length']=='5'
+        assert pairs['--max_draft_k']=='8'
+        assert pairs['--max_verification_num']=='160'
+        assert pairs['--verification_capacity']=='512'
     a,b=commands
     shared=set(a)&set(b)
     excluded={'--method','--version_name','--log_file','--timing_file','--summary_file','--saved_model_dir','--saved_draft_model_dir','--saved_statistics_dir','--checkpoint_dir'}

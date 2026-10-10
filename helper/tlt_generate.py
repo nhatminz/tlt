@@ -88,13 +88,16 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
         scheduler = TLTScheduler(); model._tlt_scheduler = scheduler
     initial_batch = input_ids.shape[0]*max(1,repeated_generate_nums or 1)
     verification_capacity = scheduler.start_rollout(initial_batch, verification_capacity,
-        model.lm_head.weight.shape[0], opd_topk if enabled else None)
-    max_draft_token_length = max(s.depth for s in scheduler.strategies)
-    max_draft_k = max(s.k for s in scheduler.strategies)
-    max_verification_num = max(s.verification_num for s in scheduler.strategies)
+        model.lm_head.weight.shape[0], opd_topk,
+        max_draft_token_length=max_draft_token_length, max_draft_k=max_draft_k,
+        max_verification_num=max_verification_num, min_draft_token_length=min_draft_token_length,
+        draft_token_length_c=draft_token_length_c)
+    workspace_depth, workspace_k, workspace_verify = (
+        scheduler.workspace_depth, scheduler.workspace_k, scheduler.workspace_verify)
     opd = None
     vocabulary_ids = None
     target_forward_count = draft_forward_count = 0
+    feedback_calls = 0
 
     def draft_generate(model, next_feature_states, draft_hidden_states, draft_past_key_values_tree, draft_token_length, past_position_ids_tensor, padding_positions, draft_k=4, draft_total_token=32):
         nonlocal draft_forward_count
@@ -364,25 +367,26 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
                              opd_profile,opd_diagnostics,enabled,opd_backend,opd_train_projector)
                 cache[key]=opd
             opd.start(model, bsz, vocabulary_ids, model.lm_head.weight.shape[1],
-                      max_contexts=1+max_draft_k*(max_draft_token_length-1),
-                      max_nodes=bsz*max_verification_num, max_path=max_draft_token_length+1,
-                      max_proposal_contexts=max_draft_k)
+                      max_contexts=1+workspace_k*(workspace_depth-1),
+                      max_nodes=min(bsz*workspace_verify, verification_capacity), max_path=workspace_depth+1,
+                      max_proposal_contexts=workspace_k)
             if opd_update_stream:
                 update_stream=torch.cuda.Stream(device)
                 source_ready=torch.cuda.Event();update_done=torch.cuda.Event()
         else:
-            key=(str(device),bsz,max_draft_k,max_draft_token_length)
+            key=(str(device),bsz,workspace_k,workspace_depth,model.lm_head.weight.shape[0],opd_topk)
             cached=getattr(model,'_tlt_tree_workspace',None)
             if cached is None or cached[0]!=key:
-                cached=(key,TreeWorkspace(device,bsz,1+max_draft_k*(max_draft_token_length-1),max_draft_token_length,max_draft_k))
+                cached=(key,TreeWorkspace(device,bsz,1+workspace_k*(workspace_depth-1),workspace_depth,workspace_k,
+                                          vocab=model.lm_head.weight.shape[0],proposal_topk=opd_topk))
                 model._tlt_tree_workspace=cached
             opd=cached[1]
         opd.async_updates=update_stream is not None
-        attention_workspace.buffer('target_tokens',(bsz,max_verification_num),torch.long)
-        attention_workspace.buffer('target_positions',(bsz,max_verification_num),torch.long)
-        attention_workspace.buffer('tree_mask',(bsz*max_verification_num*mask_columns_capacity,),model.target_model.dtype)
-        model._opd_initial_batch=bsz;model._opd_max_path_capacity=max_draft_token_length+1
-    mask_columns_capacity = input_ids.shape[-1] + max_length * (max_draft_token_length + 1) + max_verification_num
+        attention_workspace.buffer('target_tokens',(verification_capacity,),torch.long)
+        attention_workspace.buffer('target_positions',(verification_capacity,),torch.long)
+        attention_workspace.buffer('tree_mask',(verification_capacity*mask_columns_capacity,),model.target_model.dtype)
+        model._opd_initial_batch=bsz;model._opd_max_path_capacity=workspace_depth+1
+    mask_columns_capacity = input_ids.shape[-1] + max_length * (workspace_depth + 1) + workspace_verify
     pad_capacity=mask_columns_capacity
     pad_mask=getattr(model,'_opd_padding_workspace',None)
     if pad_mask is None or pad_mask.shape!=(bsz,pad_capacity) or pad_mask.device!=torch.device(device):
@@ -458,8 +462,12 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
         past_kv_len = _cache_seq_length(target_past_key_values)
         kv_length = past_kv_len + draft_total_token + 1
         q_length = draft_total_token + 1
-        if strategy is not None and bsz*q_length > verification_capacity:
+        if bsz*q_length > verification_capacity:
             raise ValueError('TLT verification rows exceed allocated capacity')
+        scheduler.current['verification_num'] = q_length
+        scheduler.current['verification_tokens'] = bsz*q_length
+        scheduler.current['actual_verify_tokens'] = bsz*q_length
+        scheduler.current['actual_verify_tokens_per_response'] = q_length
         verification_batches += 1
         active_response_rounds += bsz
         verified_tree_nodes += bsz * q_length
@@ -536,6 +544,7 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
             if path is None:
                 path = trace_verified_path(tensor_tree, target_next_token_tree, eos_token_id, kernels=opd._kernels, workspace=opd.path_workspace)
             if enabled and strategy is not None:
+                feedback_calls += 1
                 if opd_timer is not None: opd_timer.begin()
                 teacher = None # compact metadata owns every teacher coordinate needed
                 if update_stream is not None:
@@ -754,6 +763,8 @@ def speculative_generate(model, input_ids, attention_mask, tokenizer, do_sample=
     result = {'generated_token_ids': filtered_generated_token_ids, 'max_sequence_length': max_sequence_length, 'total_acc_length': avg_acc_length[0], 'total_acc': max_sequence_length / token_num, 'total_decoded_token_num': avg_acc_length[1], 'total_accepted_draft_tokens': total_accepted_draft_tokens, 'total_proposed_draft_tokens': total_proposed_draft_tokens, 'total_accepted_medusa_tokens': total_accepted_draft_tokens, 'total_proposed_medusa_tokens': total_proposed_draft_tokens, 'draft_acceptance_rate': draft_acceptance_rate, 'medusa_acceptance_rate': draft_acceptance_rate, 'total_time_cost': time.perf_counter() - start_time, 'target_time_cost': total_target_time, 'draft_time_cost': total_draft_time, 'check_time_cost': total_check_time, 'prefill_time_cost': total_prefill_time, 'post_time_cost': time.time() - post_time_start, 'all_draft_input_states': all_draft_input_states, 'all_draft_input_ids': all_draft_input_ids, 'response_accepted_length_sum': response_accepted_length_sum, 'response_verification_rounds': response_verification_rounds, 'response_generated_tokens': [len(item) for item in filtered_generated_token_ids], 'batch_verification_rounds': verification_batches, 'verification_batches': verification_batches, 'active_response_rounds': active_response_rounds, 'verified_tree_nodes': verified_tree_nodes}
     result.update(opd_statistics)
     result.update(scheduler.finish())
+    if method == 'tlt': scheduler.warn_if_low_coverage()
+    result['opd_feedback_calls'] = feedback_calls
     result.update(target_forwards=target_forward_count,draft_forwards=draft_forward_count,
                   no_extra_target_forward=target_forward_count==1+verification_batches)
     result['opd_host_syncs']=opd.host_sync_count if opd is not None else 0
